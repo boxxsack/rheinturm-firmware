@@ -25,8 +25,10 @@ int brightness = 100;
 
 tm timeinfo;
 time_t now;
+time_t lastUpdate;
 long unsigned lastNTPtime;
 unsigned long lastEntryTime;
+String scanState = "";
 
 BLEServer *pServer = NULL;
 BLECharacteristic *pCharacteristic_confState = NULL;
@@ -66,6 +68,7 @@ void attemptWiFiConnection()
   Serial.println("Attempting to connect to WiFi...");
   unsigned long startMillis = millis();
   WiFi.begin(ssid, password);
+  int i = 0;
   while (!isWiFiConnected())
   {
     if (millis() - startMillis >= 10000)
@@ -76,6 +79,9 @@ void attemptWiFiConnection()
     }
     delay(1000);
     Serial.print(".");
+    strip.setPixelColor(LED_COUNT - i, strip.Color(0, 0, 255));
+    strip.show();
+    i++;
   }
   if (isWiFiConnected())
   {
@@ -117,6 +123,10 @@ void rainbow(uint16_t duration)
       for (int i = 0; i < strip.numPixels(); i++)
       {
         strip.setPixelColor(i, Wheel((i + j) & 255));
+        if (i == 11 || i == 26)
+        {
+          strip.setPixelColor(i, strip.Color(0, 0, 0));
+        }
       }
       strip.show();
       delay(10);
@@ -124,28 +134,31 @@ void rainbow(uint16_t duration)
   }
 }
 
-bool getNTPtime(int timeoutSeconds) {
+bool getNTPtime(int timeoutSeconds)
+{
   const int minValidYear = 2016;
   const int yearOffset = 1900;
   uint32_t startTime = millis();
 
-  do {
+  do
+  {
     time(&now);
     localtime_r(&now, &timeinfo);
-    delay(10);  // Let NTP sync in background
-  } while ((millis() - startTime < timeoutSeconds * 1000) && 
+    delay(10); // Let NTP sync in background
+  } while ((millis() - startTime < timeoutSeconds * 1000) &&
            (timeinfo.tm_year < (minValidYear - yearOffset)));
 
-  if (timeinfo.tm_year < (minValidYear - yearOffset)) {
+  if (timeinfo.tm_year < (minValidYear - yearOffset))
+  {
     return false; // NTP sync failed
   }
 
-  // Optional: Print or log the current time
-  #ifdef DEBUG
-    char timeStr[30];
-    strftime(timeStr, sizeof(timeStr), "%a %d-%m-%y %T", &timeinfo);
-    Serial.println(timeStr);
-  #endif
+// Optional: Print or log the current time
+#ifdef DEBUG
+  char timeStr[30];
+  strftime(timeStr, sizeof(timeStr), "%a %d-%m-%y %T", &timeinfo);
+  Serial.println(timeStr);
+#endif
 
   return true;
 }
@@ -351,12 +364,13 @@ class scanStateCallBack : public BLECharacteristicCallbacks
   void onWrite(BLECharacteristic *pChar) override
   {
     std::string scanState_stdstr = pChar->getValue();
-    String scanState = String(scanState_stdstr.c_str());
+    scanState = String(scanState_stdstr.c_str());
+    Serial.println("ScanState: " + scanState);
     if (scanState == "scan-start")
     {
       pCharacteristic_scanState->setValue("scanning");
       pCharacteristic_scanState->notify();
-      Serial.println("ScanState: " + scanState);
+      scanState = "scanning";
       Serial.println("Initiate Scan...");
 
       // Scan for networks and set the characteristic value
@@ -380,12 +394,14 @@ class scanStateCallBack : public BLECharacteristicCallbacks
         pCharacteristic_scanState->setValue("scan-end");
         pCharacteristic_scanState->notify();
         Serial.println("ScanState: scan-end");
+        scanState = "scan-end";
       }
       else
       {
         pCharacteristic_scanState->setValue("scan-end");
         pCharacteristic_scanState->notify();
         Serial.println("ScanState: scan-end");
+        scanState = "scan-end";
       }
     }
   }
@@ -478,10 +494,10 @@ void setup()
   }
 
   // Print lengths of ssid and password for debugging
-  //Serial.print("Retrieved SSID length: ");
-  //Serial.println(ssid.length());
-  //Serial.print("Retrieved Password length: ");
-  //Serial.println(password.length());
+  // Serial.print("Retrieved SSID length: ");
+  // Serial.println(ssid.length());
+  // Serial.print("Retrieved Password length: ");
+  // Serial.println(password.length());
 
   Serial.println("*****GOT CREDS*****");
   Serial.println("SSID: " + ssid);
@@ -502,24 +518,53 @@ void loop()
   delay(100);
   Serial.println("*****LOOP*****");
 
+  while(scanState == "scanning") {
+    Serial.println("Scanning");
+    delay(1000);
+  }
+
   if (!isWiFiConnected())
   {
     pCharacteristic_confState->setValue("not_connected");
     pCharacteristic_confState->notify();
     attemptWiFiConnection();
+    if (getNTPtime(10))
+    {
+      time(&now); // refresh after sync
+      localtime_r(&now, &timeinfo);
+      Serial.println("NTP synced after successfully connection to the internet");
+    }
+    else
+    {
+      Serial.println("NTP sync failed");
+    }
   }
-  else
-  {
-    pCharacteristic_confState->setValue("connected");
-    pCharacteristic_confState->notify();
 
-    getNTPtime(10);
+  pCharacteristic_confState->setValue("connected");
+  pCharacteristic_confState->notify();
+
+  time(&now);
+  localtime_r(&now, &timeinfo);
+
+  if (now != lastUpdate)
+  {
+    lastUpdate = now;
+
     updateTime(timeinfo);
     showTime();
 
-    int seconds = timeinfo.tm_sec + timeinfo.tm_min * 60 + timeinfo.tm_hour * 3600;
-    if (seconds % 3600 == 0)
+    if (timeinfo.tm_min == 0 && timeinfo.tm_sec == 0)
     {
+      if (getNTPtime(10))
+      {
+        time(&now); // refresh after sync
+        localtime_r(&now, &timeinfo);
+        Serial.println("NTP synced at top of hour");
+      }
+      else
+      {
+        Serial.println("NTP sync failed");
+      }
       rainbow(60000);
     }
   }
