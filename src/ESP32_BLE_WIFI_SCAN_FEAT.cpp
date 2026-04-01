@@ -59,10 +59,10 @@ void loop() {
             lastDisplayUpdate = now;
             display.update(currentTime);
 
-            // Midnight rainbow
-            if (currentTime.tm_hour == 0 && currentTime.tm_min == 0 && currentTime.tm_sec == 0) {
+            // Hourly rainbow
+            if (currentTime.tm_min == 0 && currentTime.tm_sec == 0) {
                 if (!midnightRainbowTriggered) {
-                    display.playRainbow();
+                    display.playRainbow(60000, []() { ble.tick(); });
                     midnightRainbowTriggered = true;
                 }
             } else {

@@ -141,6 +141,10 @@ void BLEConfigInterface::begin(const char* deviceName) {
     _pScanState->setCallbacks(new ScanStateCallbacks(*this));
     _pBrightness->setCallbacks(new BrightnessCallbacks(*this));
 
+    // Set initial brightness value so app can read it on connect
+    uint8_t initialBrightness = 100;
+    _pBrightness->setValue(&initialBrightness, 1);
+
     pService->start();
 
     BLEAdvertising* pAdvertising = BLEDevice::getAdvertising();
@@ -187,6 +191,10 @@ void BLEConfigInterface::_stageBrightness(uint8_t value) {
 
 void BLEConfigInterface::_setClientConnected(bool connected) {
     _clientConnected = connected;
+    if (connected) {
+        // Force re-notification of current state so the app gets it immediately
+        _lastConfState = 0xFF;
+    }
 }
 
 void BLEConfigInterface::_dispatchStagedValues() {
@@ -313,7 +321,7 @@ void BLEConfigInterface::_syncConfState() {
     uint8_t current = static_cast<uint8_t>(_connectivity.getState());
     if (current != _lastConfState) {
         _lastConfState = current;
-        const char* stateStr = (current == static_cast<uint8_t>(ConnectivityState::CONNECTED_WITH_TIME))
+        const char* stateStr = (current >= static_cast<uint8_t>(ConnectivityState::CONNECTED_NO_TIME))
             ? "connected"
             : "not_connected";
         _pConfState->setValue(stateStr);

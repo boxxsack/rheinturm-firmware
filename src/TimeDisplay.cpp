@@ -9,9 +9,7 @@ TimeDisplay::TimeDisplay(ILedStrip& strip, uint16_t blinkRateMs)
     , _pendingBrightness(100)
     , _brightnessChanged(false)
     , _blinkRateMs(blinkRateMs)
-    , _rainbowActive(false)
-    , _rainbowStartMs(0)
-    , _rainbowDurationMs(0)
+    , _rainbowCancelled(false)
 {
     memset(_ledState, 0, sizeof(_ledState));
     _ledState[SEP_A] = 3;
@@ -26,17 +24,6 @@ void TimeDisplay::update(const tm& time) {
         _brightnessChanged = false;
     }
 
-    if (_rainbowActive) {
-        uint32_t elapsed = millis() - _rainbowStartMs;
-        if (elapsed >= _rainbowDurationMs) {
-            _rainbowActive = false;
-            // Fall through to render time
-        } else {
-            _renderRainbow();
-            return;
-        }
-    }
-
     _computeBcd(time);
     _renderTime();
 }
@@ -46,14 +33,32 @@ void TimeDisplay::setBrightness(uint8_t brightness) {
     _brightnessChanged = true;
 }
 
-void TimeDisplay::playRainbow(uint32_t durationMs) {
-    _rainbowActive = true;
-    _rainbowStartMs = millis();
-    _rainbowDurationMs = durationMs;
+void TimeDisplay::playRainbow(uint32_t durationMs, void (*onTick)()) {
+    _rainbowCancelled = false;
+    uint32_t startMs = millis();
+    while (millis() - startMs < durationMs && !_rainbowCancelled) {
+        if (onTick) onTick();
+        for (uint16_t j = 0; j < 256 && !_rainbowCancelled; j++) {
+            if (_brightnessChanged) {
+                _brightness = _pendingBrightness;
+                _strip.setBrightness(_brightness);
+                _brightnessChanged = false;
+            }
+            for (uint8_t i = 0; i < LED_COUNT; i++) {
+                if (i == SEP_A || i == SEP_B) {
+                    _strip.setPixelColor(i, COLOR_OFF);
+                } else {
+                    _strip.setPixelColor(i, _colorWheel((i + j) & 255));
+                }
+            }
+            _strip.show();
+            delay(10);
+        }
+    }
 }
 
 void TimeDisplay::cancelRainbow() {
-    _rainbowActive = false;
+    _rainbowCancelled = true;
 }
 
 void TimeDisplay::_computeBcd(const tm& time) {
@@ -98,21 +103,6 @@ void TimeDisplay::_renderTime() {
         default:
             _strip.setPixelColor(i, COLOR_OFF);
             break;
-        }
-    }
-    _strip.show();
-}
-
-void TimeDisplay::_renderRainbow() {
-    uint32_t elapsed = millis() - _rainbowStartMs;
-    // Map elapsed time to wheel position (full cycle over ~2.56 seconds)
-    uint8_t wheelOffset = static_cast<uint8_t>((elapsed / 10) & 0xFF);
-
-    for (uint8_t i = 0; i < LED_COUNT; i++) {
-        if (i == SEP_A || i == SEP_B) {
-            _strip.setPixelColor(i, COLOR_OFF);
-        } else {
-            _strip.setPixelColor(i, _colorWheel((i + wheelOffset) & 255));
         }
     }
     _strip.show();

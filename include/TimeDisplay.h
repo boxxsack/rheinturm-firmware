@@ -15,10 +15,11 @@ public:
     // Stores brightness — applied on next update() call.
     void setBrightness(uint8_t brightness);
 
-    // Start non-blocking rainbow animation. Frames advance via millis() each update().
-    void playRainbow(uint32_t durationMs = 60000);
+    // Blocking rainbow animation (original style). Accepts an optional callback
+    // invoked each color cycle (~2.5 s) so the caller can keep BLE dispatch alive.
+    void playRainbow(uint32_t durationMs = 60000, void (*onTick)() = nullptr);
 
-    // Cancel active rainbow — resume time display on next update().
+    // Cancel an active rainbow — the blocking loop exits on the next cycle.
     void cancelRainbow();
 
 private:
@@ -29,13 +30,11 @@ private:
     uint8_t _pendingBrightness;
     bool _brightnessChanged;
 
+    // Rainbow cancellation (set from BLE task, checked in blocking loop)
+    volatile bool _rainbowCancelled;
+
     // Separator blink
     uint16_t _blinkRateMs;
-
-    // Rainbow state
-    bool _rainbowActive;
-    uint32_t _rainbowStartMs;
-    uint32_t _rainbowDurationMs;
 
     // LED state array
     static constexpr uint8_t LED_COUNT = 41;
@@ -73,6 +72,5 @@ private:
     // Internal methods
     void _computeBcd(const tm& time);
     void _renderTime();
-    void _renderRainbow();
     static uint32_t _colorWheel(uint8_t position);
 };
