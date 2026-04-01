@@ -20,22 +20,46 @@ No test infrastructure is set up.
 
 ## Architecture
 
-All firmware logic is in a single file: `src/ESP32_BLE_WIFI_SCAN_FEAT.cpp`.
+The firmware is split into four modules with a thin orchestrator:
 
-### Major Components
+### Modules
 
-- **LED Display**: 41 NeoPixel LEDs on GPIO 5 showing hours/minutes/seconds in BCD. LEDs at indices 11 and 26 are red separator blinkers. Active LEDs use warm white (255, 243, 170).
-- **BLE Interface**: Device advertises as "Rheinturm" with service UUID `4fafc201-...`. Six characteristics handle WiFi config (SSID, password), WiFi scanning, connection state, and brightness control. Scan results are chunked into 20-byte BLE packets.
-- **WiFi/NTP**: Connects using credentials stored in NVS via Arduino Preferences (key: "credentials"). Syncs time from `de.pool.ntp.org` with CET/CEST timezone. Re-syncs hourly.
-- **Rainbow animation**: Triggers at midnight (00:00:00) for 60 seconds.
+- **TimeDisplay** (`include/TimeDisplay.h`, `src/TimeDisplay.cpp`) — Owns BCD time-to-LED conversion, separator blink logic, and non-blocking rainbow animation. Depends on `ILedStrip` interface for hardware abstraction. 4 public methods: `update()`, `setBrightness()`, `playRainbow()`, `cancelRainbow()`.
+
+- **ConnectivityManager** (`include/ConnectivityManager.h`, `src/ConnectivityManager.cpp`) — Owns WiFi connection lifecycle (non-blocking reconnect with 30s cooldown), NTP time sync (background SNTP polling), credential persistence (NVS), and async WiFi scanning. 7 public methods: `begin()`, `tick()`, `applyCredentials()`, `getState()`, `hasValidTime()`, `startAsyncScan()`, `checkScanResults()`.
+
+- **BLEConfigInterface** (`include/BLEConfigInterface.h`, `src/BLEConfigInterface.cpp`) — Owns the entire BLE stack: server, service, 6 characteristics, callback dispatch. BLE callbacks stage values in private fields; `tick()` dispatches to ConnectivityManager and TimeDisplay (cross-task safe). Non-blocking scan state machine with chunked 20-byte notifications. 3 public methods: `begin()`, `tick()`, `isClientConnected()`.
+
+- **ILedStrip / NeoPixelAdapter** (`include/ILedStrip.h`, `include/NeoPixelAdapter.h`, `src/NeoPixelAdapter.cpp`) — Abstract 3-method LED strip interface (`setPixelColor`, `show`, `setBrightness`) with Adafruit NeoPixel adapter. Enables testing without hardware.
+
+### Shared Types
+
+- **ConnectivityState** (`include/ConnectivityState.h`) — Enum shared by ConnectivityManager and BLEConfigInterface: `DISCONNECTED`, `CONNECTING`, `CONNECTED_NO_TIME`, `CONNECTED_WITH_TIME`.
+
+### Orchestrator
+
+`src/ESP32_BLE_WIFI_SCAN_FEAT.cpp` — Thin setup/loop that constructs all modules and calls `tick()` on each. Handles midnight rainbow trigger. ~80 lines.
+
+### Dependency Graph
+
+```
+BLEConfigInterface → ConnectivityManager (credentials, scan, state)
+BLEConfigInterface → TimeDisplay (brightness)
+TimeDisplay → ILedStrip
+ConnectivityManager and TimeDisplay have no knowledge of BLE.
+```
 
 ### Flow
 
-`setup()` initializes BLE, loads WiFi credentials from NVS, starts NeoPixel strip. `loop()` runs at ~10Hz, reconnects WiFi if needed, syncs NTP, and updates the LED display.
+`setup()` initializes the LED strip, then calls `begin()` on ConnectivityManager and BLEConfigInterface. `loop()` runs at ~10Hz: `connectivity.tick()` drives WiFi/NTP, `ble.tick()` drives BLE dispatch and scan delivery, `display.update()` renders the current time. All operations are non-blocking.
 
 ## Key Details
 
-- German variable names and comments throughout (e.g., `blinkgeschwindigkeit`, `Stunden`)
+- 41 NeoPixel LEDs on GPIO 5, BCD layout with separators at indices 11 and 26
+- BLE device name: "Rheinturm", service UUID: `4fafc201-1fb5-459e-8fcc-c5c9c331914b`
+- WiFi credentials stored in NVS via Preferences (namespace: "credentials")
+- NTP server: `de.pool.ntp.org`, timezone: CET/CEST
 - Partition scheme: `huge_app.csv` (needed for BLE + WiFi stack size)
 - Dependency: Adafruit NeoPixel v1.12.3
 - `#define DEBUG` enables serial debug output
+- `#define FIRMWARE_VERSION "2.0.0"` in main file
