@@ -37,7 +37,7 @@ void setup() {
 
     // Initialize modules
     connectivity.begin();
-    ble.begin("Rheinturm");
+    ble.begin("Rheinturm", FIRMWARE_VERSION);
 
     Serial.println("*****SETUP END*****");
 }
