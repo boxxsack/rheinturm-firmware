@@ -263,10 +263,25 @@ void BLEConfigInterface::_performOta(const String& url) {
         return;
     }
 
-    // Notify start
+    // Notify start via BLE before shutting it down
     _pOtaControl->setValue("ota-start");
     _pOtaControl->notify();
-    delay(100);
+    delay(500);
+
+    // Free BLE memory (~60-80 KB) — required for TLS handshake with GitHub
+    Serial.println("OTA: Releasing BLE to free heap for TLS");
+    BLEDevice::deinit(true);
+    _pServer = nullptr;
+    _pConfState = nullptr;
+    _pSsid = nullptr;
+    _pPassword = nullptr;
+    _pScanState = nullptr;
+    _pScanList = nullptr;
+    _pBrightness = nullptr;
+    _pFirmwareVersion = nullptr;
+    _pOtaControl = nullptr;
+
+    Serial.printf("OTA: Free heap after BLE deinit: %u bytes\n", ESP.getFreeHeap());
 
     // Show initial progress on LEDs
     _display.showOtaProgress(0);
@@ -274,14 +289,12 @@ void BLEConfigInterface::_performOta(const String& url) {
     WiFiClientSecure client;
     client.setInsecure();
 
-    // Set up progress callback
+    // Set up progress callback (LED only — BLE is released)
     httpUpdate.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
     httpUpdate.onProgress([this](int current, int total) {
         if (total > 0) {
             int percent = (current * 100) / total;
-            String progressMsg = "ota-progress:" + String(percent);
-            _pOtaControl->setValue(progressMsg.c_str());
-            _pOtaControl->notify();
+            Serial.printf("OTA: Progress %d%%\n", percent);
             _display.showOtaProgress(percent);
         }
     });
@@ -293,23 +306,19 @@ void BLEConfigInterface::_performOta(const String& url) {
             Serial.printf("OTA: Update failed (%d): %s\n",
                 httpUpdate.getLastError(),
                 httpUpdate.getLastErrorString().c_str());
-            {
-                String failMsg = "ota-fail:" + httpUpdate.getLastErrorString();
-                _pOtaControl->setValue(failMsg.c_str());
-                _pOtaControl->notify();
-            }
+            Serial.println("OTA: Restarting to restore BLE...");
+            delay(1000);
+            ESP.restart();
             break;
 
         case HTTP_UPDATE_NO_UPDATES:
-            Serial.println("OTA: No updates available");
-            _pOtaControl->setValue("ota-fail:no_updates");
-            _pOtaControl->notify();
+            Serial.println("OTA: No updates available, restarting...");
+            delay(1000);
+            ESP.restart();
             break;
 
         case HTTP_UPDATE_OK:
             Serial.println("OTA: Update successful, restarting...");
-            _pOtaControl->setValue("ota-success");
-            _pOtaControl->notify();
             delay(1000);
             ESP.restart();
             break;
