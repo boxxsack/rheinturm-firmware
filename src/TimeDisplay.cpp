@@ -61,6 +61,14 @@ void TimeDisplay::cancelRainbow() {
     _rainbowCancelled = true;
 }
 
+void TimeDisplay::showOtaProgress(uint8_t percent) {
+    uint8_t ledsToFill = (static_cast<uint16_t>(percent) * LED_COUNT) / 100;
+    for (uint8_t i = 0; i < LED_COUNT; i++) {
+        _strip.setPixelColor(i, i < ledsToFill ? COLOR_TEAL : COLOR_OFF);
+    }
+    _strip.show();
+}
+
 void TimeDisplay::_computeBcd(const tm& time) {
     // Reset all LEDs
     memset(_ledState, 0, sizeof(_ledState));

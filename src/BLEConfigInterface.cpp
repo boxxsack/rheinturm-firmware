@@ -8,16 +8,20 @@
 #include <BLEServer.h>
 #include <BLE2902.h>
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <HTTPUpdate.h>
 #include <Arduino.h>
 
 // BLE UUIDs
-#define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
-#define CONF_STATE_UUID     "4fafff01-1fb5-459e-8fcc-c5c9c331914b"
-#define CONF_SSID_UUID      "4fafff02-1fb5-459e-8fcc-c5c9c331914b"
-#define CONF_PASSWORD_UUID  "4fafff03-1fb5-459e-8fcc-c5c9c331914b"
-#define SCAN_STATE_UUID     "4fafff04-1fb5-459e-8fcc-c5c9c331914b"
-#define SCAN_LIST_UUID      "4fafff05-1fb5-459e-8fcc-c5c9c331914b"
-#define BRIGHTNESS_UUID     "4fafff06-1fb5-459e-8fcc-c5c9c331914b"
+#define SERVICE_UUID          "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
+#define CONF_STATE_UUID       "4fafff01-1fb5-459e-8fcc-c5c9c331914b"
+#define CONF_SSID_UUID        "4fafff02-1fb5-459e-8fcc-c5c9c331914b"
+#define CONF_PASSWORD_UUID    "4fafff03-1fb5-459e-8fcc-c5c9c331914b"
+#define SCAN_STATE_UUID       "4fafff04-1fb5-459e-8fcc-c5c9c331914b"
+#define SCAN_LIST_UUID        "4fafff05-1fb5-459e-8fcc-c5c9c331914b"
+#define BRIGHTNESS_UUID       "4fafff06-1fb5-459e-8fcc-c5c9c331914b"
+#define FIRMWARE_VERSION_UUID "4fafff07-1fb5-459e-8fcc-c5c9c331914b"
+#define OTA_CONTROL_UUID      "4fafff08-1fb5-459e-8fcc-c5c9c331914b"
 
 // --- BLE Callback Classes (private to this translation unit) ---
 
@@ -94,6 +98,21 @@ private:
     BLEConfigInterface& _owner;
 };
 
+class OtaControlCallbacks : public BLECharacteristicCallbacks {
+public:
+    explicit OtaControlCallbacks(BLEConfigInterface& owner) : _owner(owner) {}
+
+    void onWrite(BLECharacteristic* pChar) override {
+        std::string value = pChar->getValue();
+        if (value.length() > 0) {
+            _owner._stageOtaUrl(value.c_str(), value.length());
+        }
+    }
+
+private:
+    BLEConfigInterface& _owner;
+};
+
 // --- BLEConfigInterface Implementation ---
 
 BLEConfigInterface::BLEConfigInterface(ConnectivityManager& connectivity, TimeDisplay& display)
@@ -103,14 +122,14 @@ BLEConfigInterface::BLEConfigInterface(ConnectivityManager& connectivity, TimeDi
     memset(_scanBuffer, 0, sizeof(_scanBuffer));
 }
 
-void BLEConfigInterface::begin(const char* deviceName) {
+void BLEConfigInterface::begin(const char* deviceName, const char* firmwareVersion) {
     BLEDevice::init(deviceName);
 
     _pServer = BLEDevice::createServer();
     _pServer->setCallbacks(new ServerCallbacks(*this));
 
     static BLEUUID serviceUUID(SERVICE_UUID);
-    BLEService* pService = _pServer->createService(serviceUUID, 30, 0);
+    BLEService* pService = _pServer->createService(serviceUUID, 40, 0);
 
     _pConfState = pService->createCharacteristic(
         CONF_STATE_UUID,
@@ -136,14 +155,24 @@ void BLEConfigInterface::begin(const char* deviceName) {
         BRIGHTNESS_UUID,
         BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_NOTIFY);
 
+    _pFirmwareVersion = pService->createCharacteristic(
+        FIRMWARE_VERSION_UUID,
+        BLECharacteristic::PROPERTY_READ);
+
+    _pOtaControl = pService->createCharacteristic(
+        OTA_CONTROL_UUID,
+        BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_NOTIFY);
+
     _pSsid->setCallbacks(new SSIDCallbacks(*this));
     _pPassword->setCallbacks(new PasswordCallbacks(*this));
     _pScanState->setCallbacks(new ScanStateCallbacks(*this));
     _pBrightness->setCallbacks(new BrightnessCallbacks(*this));
+    _pOtaControl->setCallbacks(new OtaControlCallbacks(*this));
 
-    // Set initial brightness value so app can read it on connect
+    // Set initial values
     uint8_t initialBrightness = 100;
     _pBrightness->setValue(&initialBrightness, 1);
+    _pFirmwareVersion->setValue(firmwareVersion);
 
     pService->start();
 
@@ -189,6 +218,12 @@ void BLEConfigInterface::_stageBrightness(uint8_t value) {
     Serial.println("BLE: Brightness staged: " + String(value));
 }
 
+void BLEConfigInterface::_stageOtaUrl(const char* url, size_t len) {
+    _pendingOtaUrl = String(url);
+    _otaRequested = true;
+    Serial.println("BLE: OTA URL staged: " + _pendingOtaUrl);
+}
+
 void BLEConfigInterface::_setClientConnected(bool connected) {
     _clientConnected = connected;
     if (connected) {
@@ -208,6 +243,76 @@ void BLEConfigInterface::_dispatchStagedValues() {
         _brightnessReady = false;
         Serial.println("BLE: Dispatching brightness: " + String(_pendingBrightnessValue));
         _display.setBrightness(_pendingBrightnessValue);
+    }
+
+    if (_otaRequested) {
+        _otaRequested = false;
+        Serial.println("BLE: Dispatching OTA update");
+        _performOta(_pendingOtaUrl);
+    }
+}
+
+void BLEConfigInterface::_performOta(const String& url) {
+    Serial.println("OTA: Starting update from: " + url);
+
+    // Check WiFi connection
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("OTA: WiFi not connected, aborting");
+        _pOtaControl->setValue("ota-fail:wifi_not_connected");
+        _pOtaControl->notify();
+        return;
+    }
+
+    // Notify start
+    _pOtaControl->setValue("ota-start");
+    _pOtaControl->notify();
+    delay(100);
+
+    // Show initial progress on LEDs
+    _display.showOtaProgress(0);
+
+    WiFiClientSecure client;
+    client.setInsecure();
+
+    // Set up progress callback
+    httpUpdate.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
+    httpUpdate.onProgress([this](int current, int total) {
+        if (total > 0) {
+            int percent = (current * 100) / total;
+            String progressMsg = "ota-progress:" + String(percent);
+            _pOtaControl->setValue(progressMsg.c_str());
+            _pOtaControl->notify();
+            _display.showOtaProgress(percent);
+        }
+    });
+
+    t_httpUpdate_return result = httpUpdate.update(client, url);
+
+    switch (result) {
+        case HTTP_UPDATE_FAILED:
+            Serial.printf("OTA: Update failed (%d): %s\n",
+                httpUpdate.getLastError(),
+                httpUpdate.getLastErrorString().c_str());
+            {
+                String failMsg = "ota-fail:" + httpUpdate.getLastErrorString();
+                _pOtaControl->setValue(failMsg.c_str());
+                _pOtaControl->notify();
+            }
+            break;
+
+        case HTTP_UPDATE_NO_UPDATES:
+            Serial.println("OTA: No updates available");
+            _pOtaControl->setValue("ota-fail:no_updates");
+            _pOtaControl->notify();
+            break;
+
+        case HTTP_UPDATE_OK:
+            Serial.println("OTA: Update successful, restarting...");
+            _pOtaControl->setValue("ota-success");
+            _pOtaControl->notify();
+            delay(1000);
+            ESP.restart();
+            break;
     }
 }
 

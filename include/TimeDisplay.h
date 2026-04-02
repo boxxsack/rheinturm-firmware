@@ -22,6 +22,9 @@ public:
     // Cancel an active rainbow — the blocking loop exits on the next cycle.
     void cancelRainbow();
 
+    // Show OTA update progress on LEDs (0-100%). Fills LEDs proportionally in teal.
+    void showOtaProgress(uint8_t percent);
+
 private:
     ILedStrip& _strip;
 
@@ -68,6 +71,7 @@ private:
     static constexpr uint32_t COLOR_WARM_WHITE = (255u << 16) | (243u << 8) | 170u;
     static constexpr uint32_t COLOR_RED        = (255u << 16);
     static constexpr uint32_t COLOR_OFF        = 0;
+    static constexpr uint32_t COLOR_TEAL       = (4u << 16) | (94u << 8) | 135u;
 
     // Internal methods
     void _computeBcd(const tm& time);

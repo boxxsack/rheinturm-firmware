@@ -14,13 +14,14 @@ public:
     BLEConfigInterface(ConnectivityManager& connectivity, TimeDisplay& display);
 
     // Call once in setup(). Creates BLE server, service, characteristics, starts advertising.
-    void begin(const char* deviceName = "Rheinturm");
+    void begin(const char* deviceName = "Rheinturm", const char* firmwareVersion = "0.0.0");
 
     // Call every loop() iteration. Non-blocking. Drives:
     //   - Advertising restart after disconnect
     //   - Staged callback dispatch to ConnectivityManager/TimeDisplay
     //   - Non-blocking scan state machine with chunked notifications
     //   - confState characteristic sync with connectivity state
+    //   - OTA update dispatch
     void tick();
 
     // True when a BLE client is connected.
@@ -32,6 +33,7 @@ public:
     void _stageScanRequest();
     void _stageBrightness(uint8_t value);
     void _setClientConnected(bool connected);
+    void _stageOtaUrl(const char* url, size_t len);
 
 private:
     ConnectivityManager& _connectivity;
@@ -45,6 +47,8 @@ private:
     BLECharacteristic* _pScanState = nullptr;
     BLECharacteristic* _pScanList = nullptr;
     BLECharacteristic* _pBrightness = nullptr;
+    BLECharacteristic* _pFirmwareVersion = nullptr;
+    BLECharacteristic* _pOtaControl = nullptr;
 
     // Connection state
     bool _clientConnected = false;
@@ -57,6 +61,10 @@ private:
     bool _brightnessReady = false;
     uint8_t _pendingBrightnessValue = 0;
     bool _scanRequested = false;
+
+    // OTA state
+    String _pendingOtaUrl;
+    bool _otaRequested = false;
 
     // Scan state machine
     enum class ScanPhase : uint8_t {
@@ -87,4 +95,5 @@ private:
     void _deliverNextChunk();
     void _handleAdvertisingRestart();
     void _syncConfState();
+    void _performOta(const String& url);
 };
