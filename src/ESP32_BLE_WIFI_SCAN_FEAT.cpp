@@ -1,7 +1,7 @@
 #include <Arduino.h>
 #include <Adafruit_NeoPixel.h>
 
-#define FIRMWARE_VERSION "2.3.4"
+#define FIRMWARE_VERSION "2.3.5"
 
 #include "NeoPixelAdapter.h"
 #include "TimeDisplay.h"
