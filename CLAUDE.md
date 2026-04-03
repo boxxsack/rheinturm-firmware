@@ -24,11 +24,11 @@ The firmware is split into four modules with a thin orchestrator:
 
 ### Modules
 
-- **TimeDisplay** (`include/TimeDisplay.h`, `src/TimeDisplay.cpp`) — Owns BCD time-to-LED conversion, separator blink logic, and non-blocking rainbow animation. Depends on `ILedStrip` interface for hardware abstraction. 4 public methods: `update()`, `setBrightness()`, `playRainbow()`, `cancelRainbow()`.
+- **TimeDisplay** (`include/TimeDisplay.h`, `src/TimeDisplay.cpp`) — Owns BCD time-to-LED conversion, separator blink logic, non-blocking rainbow animation, and OTA progress display. Depends on `ILedStrip` interface for hardware abstraction. 5 public methods: `update()`, `setBrightness()`, `playRainbow()`, `cancelRainbow()`, `showOtaProgress()`.
 
 - **ConnectivityManager** (`include/ConnectivityManager.h`, `src/ConnectivityManager.cpp`) — Owns WiFi connection lifecycle (non-blocking reconnect with 30s cooldown), NTP time sync (background SNTP polling), credential persistence (NVS), and async WiFi scanning. 7 public methods: `begin()`, `tick()`, `applyCredentials()`, `getState()`, `hasValidTime()`, `startAsyncScan()`, `checkScanResults()`.
 
-- **BLEConfigInterface** (`include/BLEConfigInterface.h`, `src/BLEConfigInterface.cpp`) — Owns the entire BLE stack: server, service, 6 characteristics, callback dispatch. BLE callbacks stage values in private fields; `tick()` dispatches to ConnectivityManager and TimeDisplay (cross-task safe). Non-blocking scan state machine with chunked 20-byte notifications. 3 public methods: `begin()`, `tick()`, `isClientConnected()`.
+- **BLEConfigInterface** (`include/BLEConfigInterface.h`, `src/BLEConfigInterface.cpp`) — Owns the entire BLE stack: server, service, 8 characteristics (confState, SSID, password, scanState, scanList, brightness, firmwareVersion, otaControl), callback dispatch. BLE callbacks stage values in private fields; `tick()` dispatches to ConnectivityManager and TimeDisplay (cross-task safe). Non-blocking scan state machine with chunked 20-byte notifications. OTA update support: receives download URL over BLE, deinits BLE to free ~60-80KB heap for TLS, downloads firmware via `HTTPUpdate` over WiFi, shows progress on LEDs, then restarts. 3 public methods: `begin()`, `tick()`, `isClientConnected()`.
 
 - **ILedStrip / NeoPixelAdapter** (`include/ILedStrip.h`, `include/NeoPixelAdapter.h`, `src/NeoPixelAdapter.cpp`) — Abstract 3-method LED strip interface (`setPixelColor`, `show`, `setBrightness`) with Adafruit NeoPixel adapter. Enables testing without hardware.
 
@@ -59,7 +59,7 @@ ConnectivityManager and TimeDisplay have no knowledge of BLE.
 - BLE device name: "Rheinturm", service UUID: `4fafc201-1fb5-459e-8fcc-c5c9c331914b`
 - WiFi credentials stored in NVS via Preferences (namespace: "credentials")
 - NTP server: `de.pool.ntp.org`, timezone: CET/CEST
-- Partition scheme: `huge_app.csv` (needed for BLE + WiFi stack size)
-- Dependency: Adafruit NeoPixel v1.12.3
+- Partition scheme: `partitions_ota.csv` (dual OTA partitions — `ota_0` and `ota_1` at ~1.8MB each, enables over-the-air updates)
+- Dependencies: Adafruit NeoPixel v1.12.3, HTTPUpdate (included in ESP32 Arduino framework)
 - `#define DEBUG` enables serial debug output
-- `#define FIRMWARE_VERSION "2.0.0"` in main file
+- `#define FIRMWARE_VERSION "2.2.0"` in main file — published releases on GitHub Releases
