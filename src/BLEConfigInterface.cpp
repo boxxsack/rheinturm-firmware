@@ -22,6 +22,7 @@
 #define BRIGHTNESS_UUID       "4fafff06-1fb5-459e-8fcc-c5c9c331914b"
 #define FIRMWARE_VERSION_UUID "4fafff07-1fb5-459e-8fcc-c5c9c331914b"
 #define OTA_CONTROL_UUID      "4fafff08-1fb5-459e-8fcc-c5c9c331914b"
+#define RAINBOW_UUID          "4fafff09-1fb5-459e-8fcc-c5c9c331914b"
 
 // --- BLE Callback Classes (private to this translation unit) ---
 
@@ -113,6 +114,21 @@ private:
     BLEConfigInterface& _owner;
 };
 
+class RainbowCallbacks : public BLECharacteristicCallbacks {
+public:
+    explicit RainbowCallbacks(BLEConfigInterface& owner) : _owner(owner) {}
+
+    void onWrite(BLECharacteristic* pChar) override {
+        std::string value = pChar->getValue();
+        if (value.length() > 0) {
+            _owner._stageRainbow(static_cast<uint8_t>(value[0]) == 1);
+        }
+    }
+
+private:
+    BLEConfigInterface& _owner;
+};
+
 // --- BLEConfigInterface Implementation ---
 
 BLEConfigInterface::BLEConfigInterface(ConnectivityManager& connectivity, TimeDisplay& display)
@@ -163,16 +179,23 @@ void BLEConfigInterface::begin(const char* deviceName, const char* firmwareVersi
         OTA_CONTROL_UUID,
         BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_NOTIFY);
 
+    _pRainbow = pService->createCharacteristic(
+        RAINBOW_UUID,
+        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE);
+
     _pSsid->setCallbacks(new SSIDCallbacks(*this));
     _pPassword->setCallbacks(new PasswordCallbacks(*this));
     _pScanState->setCallbacks(new ScanStateCallbacks(*this));
     _pBrightness->setCallbacks(new BrightnessCallbacks(*this));
     _pOtaControl->setCallbacks(new OtaControlCallbacks(*this));
+    _pRainbow->setCallbacks(new RainbowCallbacks(*this));
 
     // Set initial values
     uint8_t initialBrightness = 100;
     _pBrightness->setValue(&initialBrightness, 1);
     _pFirmwareVersion->setValue(firmwareVersion);
+    uint8_t rainbowOff = 0;
+    _pRainbow->setValue(&rainbowOff, 1);
 
     pService->start();
 
@@ -222,6 +245,31 @@ void BLEConfigInterface::_stageOtaUrl(const char* url, size_t len) {
     _pendingOtaUrl = String(url);
     _otaRequested = true;
     Serial.println("BLE: OTA URL staged: " + _pendingOtaUrl);
+}
+
+void BLEConfigInterface::_stageRainbow(bool active) {
+    if (active) {
+        _rainbowRequested = true;
+        Serial.println("BLE: Rainbow start staged");
+    } else {
+        _display.cancelRainbow();
+        Serial.println("BLE: Rainbow cancelled");
+    }
+}
+
+bool BLEConfigInterface::isRainbowRequested() {
+    return _rainbowRequested;
+}
+
+void BLEConfigInterface::acknowledgeRainbow() {
+    _rainbowRequested = false;
+    uint8_t on = 1;
+    _pRainbow->setValue(&on, 1);
+}
+
+void BLEConfigInterface::onRainbowComplete() {
+    uint8_t off = 0;
+    _pRainbow->setValue(&off, 1);
 }
 
 void BLEConfigInterface::_setClientConnected(bool connected) {
@@ -280,6 +328,7 @@ void BLEConfigInterface::_performOta(const String& url) {
     _pBrightness = nullptr;
     _pFirmwareVersion = nullptr;
     _pOtaControl = nullptr;
+    _pRainbow = nullptr;
 
     Serial.printf("OTA: Free heap after BLE deinit: %u bytes\n", ESP.getFreeHeap());
 

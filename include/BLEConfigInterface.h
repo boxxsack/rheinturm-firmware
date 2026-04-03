@@ -34,6 +34,16 @@ public:
     void _stageBrightness(uint8_t value);
     void _setClientConnected(bool connected);
     void _stageOtaUrl(const char* url, size_t len);
+    void _stageRainbow(bool active);
+
+    // Rainbow control — call from the main loop to drive the blocking animation.
+    // Returns true once when a BLE client has requested a rainbow start.
+    bool isRainbowRequested();
+    // Call before starting playRainbow(): clears the request flag and sets the
+    // characteristic value to 1 (active).
+    void acknowledgeRainbow();
+    // Call after playRainbow() returns: resets the characteristic value to 0.
+    void onRainbowComplete();
 
 private:
     ConnectivityManager& _connectivity;
@@ -49,6 +59,7 @@ private:
     BLECharacteristic* _pBrightness = nullptr;
     BLECharacteristic* _pFirmwareVersion = nullptr;
     BLECharacteristic* _pOtaControl = nullptr;
+    BLECharacteristic* _pRainbow = nullptr;
 
     // Connection state
     bool _clientConnected = false;
@@ -65,6 +76,9 @@ private:
     // OTA state
     String _pendingOtaUrl;
     bool _otaRequested = false;
+
+    // Rainbow state
+    bool _rainbowRequested = false;
 
     // Scan state machine
     enum class ScanPhase : uint8_t {

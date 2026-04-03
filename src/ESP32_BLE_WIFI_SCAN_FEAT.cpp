@@ -1,7 +1,7 @@
 #include <Arduino.h>
 #include <Adafruit_NeoPixel.h>
 
-#define FIRMWARE_VERSION "2.2.0"
+#define FIRMWARE_VERSION "2.3.0"
 
 #include "NeoPixelAdapter.h"
 #include "TimeDisplay.h"
@@ -50,6 +50,12 @@ void loop() {
     bool hasTime = connectivity.tick(currentTime);
 
     ble.tick();
+
+    if (ble.isRainbowRequested()) {
+        ble.acknowledgeRainbow();
+        display.playRainbow(60000, []() { ble.tick(); });
+        ble.onRainbowComplete();
+    }
 
     if (hasTime) {
         time_t now = mktime(&currentTime);
