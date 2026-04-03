@@ -328,6 +328,7 @@ void BLEConfigInterface::_performOta(const String& url) {
     _pBrightness = nullptr;
     _pFirmwareVersion = nullptr;
     _pOtaControl = nullptr;
+    _pRainbow = nullptr;
 
     Serial.printf("OTA: Free heap after BLE deinit: %u bytes\n", ESP.getFreeHeap());
 
