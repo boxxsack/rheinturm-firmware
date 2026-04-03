@@ -51,6 +51,12 @@ void loop() {
 
     ble.tick();
 
+    if (ble.isRainbowRequested()) {
+        ble.acknowledgeRainbow();
+        display.playRainbow(60000, []() { ble.tick(); });
+        ble.onRainbowComplete();
+    }
+
     if (hasTime) {
         time_t now = mktime(&currentTime);
 
