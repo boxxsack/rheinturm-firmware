@@ -9,6 +9,7 @@
 #include <BLE2902.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
+#include <HTTPClient.h>
 #include <HTTPUpdate.h>
 #include <Arduino.h>
 
@@ -335,11 +336,33 @@ void BLEConfigInterface::_performOta(const String& url) {
     // Show initial progress on LEDs
     _display.showOtaProgress(0);
 
+    // Resolve any redirect (e.g. github.com → objects.githubusercontent.com) before
+    // the actual update. HTTPUpdate reuses the same WiFiClientSecure socket and cannot
+    // switch hosts mid-redirect, so we pre-resolve with a short-lived HTTPClient.
+    String resolvedUrl = url;
+    {
+        WiFiClientSecure resolveClient;
+        resolveClient.setInsecure();
+        HTTPClient resolveHttp;
+        resolveHttp.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
+        if (resolveHttp.begin(resolveClient, url)) {
+            int code = resolveHttp.GET();
+            if (code == 301 || code == 302 || code == 307 || code == 308) {
+                String location = resolveHttp.getLocation();
+                if (location.length() > 0) {
+                    resolvedUrl = location;
+                    Serial.println("OTA: Resolved URL: " + resolvedUrl);
+                }
+            }
+            resolveHttp.end();
+        }
+    }
+
     WiFiClientSecure client;
     client.setInsecure();
 
-    // Set up progress callback (LED only — BLE is released)
-    httpUpdate.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
+    // Redirects already resolved above — disable further redirect following.
+    httpUpdate.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
     httpUpdate.onProgress([this](int current, int total) {
         if (total > 0) {
             int percent = (current * 100) / total;
@@ -348,7 +371,7 @@ void BLEConfigInterface::_performOta(const String& url) {
         }
     });
 
-    t_httpUpdate_return result = httpUpdate.update(client, url);
+    t_httpUpdate_return result = httpUpdate.update(client, resolvedUrl);
 
     switch (result) {
         case HTTP_UPDATE_FAILED:
