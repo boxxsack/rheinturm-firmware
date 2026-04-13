@@ -1,5 +1,6 @@
 #include "TimeDisplay.h"
 #include <Arduino.h>
+#include <Preferences.h>
 
 constexpr TimeDisplay::BcdSegment TimeDisplay::SEGMENTS[6];
 
@@ -22,6 +23,14 @@ void TimeDisplay::update(const tm& time) {
         _brightness = _pendingBrightness;
         _strip.setBrightness(_brightness);
         _brightnessChanged = false;
+    }
+
+    // If outside the scheduled on-window, blank the display without altering
+    // the stored brightness so re-entering the window restores it automatically.
+    if (!_isScheduleActive(time)) {
+        _strip.clear();
+        _strip.show();
+        return;
     }
 
     _computeBcd(time);
@@ -114,6 +123,61 @@ void TimeDisplay::_renderTime() {
         }
     }
     _strip.show();
+}
+
+void TimeDisplay::setSchedule(const uint8_t* payload, size_t len) {
+    if (len < 5) return;
+    if (payload[1] > 23 || payload[3] > 23 || payload[2] > 59 || payload[4] > 59) return;
+    _schedEnabled = payload[0] ? 1 : 0;
+    _schedOnH     = payload[1];
+    _schedOnM     = payload[2];
+    _schedOffH    = payload[3];
+    _schedOffM    = payload[4];
+    _persistSchedule();
+    Serial.printf("Schedule set: enabled=%d on=%02d:%02d off=%02d:%02d\n",
+        _schedEnabled, _schedOnH, _schedOnM, _schedOffH, _schedOffM);
+}
+
+void TimeDisplay::loadSchedule() {
+    Preferences prefs;
+    prefs.begin("schedule", true);
+    _schedEnabled = prefs.getUChar("en",   0);
+    _schedOnH     = prefs.getUChar("onH",  8);
+    _schedOnM     = prefs.getUChar("onM",  0);
+    _schedOffH    = prefs.getUChar("offH", 23);
+    _schedOffM    = prefs.getUChar("offM", 0);
+    prefs.end();
+    Serial.printf("Schedule loaded: enabled=%d on=%02d:%02d off=%02d:%02d\n",
+        _schedEnabled, _schedOnH, _schedOnM, _schedOffH, _schedOffM);
+}
+
+void TimeDisplay::getScheduleBytes(uint8_t out[5]) const {
+    out[0] = _schedEnabled;
+    out[1] = _schedOnH;
+    out[2] = _schedOnM;
+    out[3] = _schedOffH;
+    out[4] = _schedOffM;
+}
+
+bool TimeDisplay::_isScheduleActive(const tm& time) const {
+    if (!_schedEnabled) return true;
+    int now = time.tm_hour * 60 + time.tm_min;
+    int on  = _schedOnH  * 60 + _schedOnM;
+    int off = _schedOffH * 60 + _schedOffM;
+    if (on == off)  return false;          // degenerate window → always off
+    if (on < off)   return now >= on && now < off;  // same-day window
+    return now >= on || now < off;         // cross-midnight window
+}
+
+void TimeDisplay::_persistSchedule() const {
+    Preferences prefs;
+    prefs.begin("schedule", false);
+    prefs.putUChar("en",   _schedEnabled);
+    prefs.putUChar("onH",  _schedOnH);
+    prefs.putUChar("onM",  _schedOnM);
+    prefs.putUChar("offH", _schedOffH);
+    prefs.putUChar("offM", _schedOffM);
+    prefs.end();
 }
 
 uint32_t TimeDisplay::_colorWheel(uint8_t position) {

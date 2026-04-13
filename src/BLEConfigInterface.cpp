@@ -24,6 +24,7 @@
 #define FIRMWARE_VERSION_UUID "4fafff07-1fb5-459e-8fcc-c5c9c331914b"
 #define OTA_CONTROL_UUID      "4fafff08-1fb5-459e-8fcc-c5c9c331914b"
 #define RAINBOW_UUID          "4fafff09-1fb5-459e-8fcc-c5c9c331914b"
+#define SCHEDULE_UUID         "4fafff0a-1fb5-459e-8fcc-c5c9c331914b"
 
 // --- BLE Callback Classes (private to this translation unit) ---
 
@@ -130,6 +131,21 @@ private:
     BLEConfigInterface& _owner;
 };
 
+class ScheduleCallbacks : public BLECharacteristicCallbacks {
+public:
+    explicit ScheduleCallbacks(BLEConfigInterface& owner) : _owner(owner) {}
+
+    void onWrite(BLECharacteristic* pChar) override {
+        std::string value = pChar->getValue();
+        if (value.length() >= 5) {
+            _owner._stageSchedule(reinterpret_cast<const uint8_t*>(value.data()), value.length());
+        }
+    }
+
+private:
+    BLEConfigInterface& _owner;
+};
+
 // --- BLEConfigInterface Implementation ---
 
 BLEConfigInterface::BLEConfigInterface(ConnectivityManager& connectivity, TimeDisplay& display)
@@ -184,12 +200,17 @@ void BLEConfigInterface::begin(const char* deviceName, const char* firmwareVersi
         RAINBOW_UUID,
         BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE);
 
+    _pSchedule = pService->createCharacteristic(
+        SCHEDULE_UUID,
+        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE);
+
     _pSsid->setCallbacks(new SSIDCallbacks(*this));
     _pPassword->setCallbacks(new PasswordCallbacks(*this));
     _pScanState->setCallbacks(new ScanStateCallbacks(*this));
     _pBrightness->setCallbacks(new BrightnessCallbacks(*this));
     _pOtaControl->setCallbacks(new OtaControlCallbacks(*this));
     _pRainbow->setCallbacks(new RainbowCallbacks(*this));
+    _pSchedule->setCallbacks(new ScheduleCallbacks(*this));
 
     // Set initial values
     uint8_t initialBrightness = 100;
@@ -197,6 +218,9 @@ void BLEConfigInterface::begin(const char* deviceName, const char* firmwareVersi
     _pFirmwareVersion->setValue(firmwareVersion);
     uint8_t rainbowOff = 0;
     _pRainbow->setValue(&rainbowOff, 1);
+    uint8_t scheduleBytes[5];
+    _display.getScheduleBytes(scheduleBytes);
+    _pSchedule->setValue(scheduleBytes, 5);
 
     pService->start();
 
@@ -248,6 +272,14 @@ void BLEConfigInterface::_stageOtaUrl(const char* url, size_t len) {
     Serial.println("BLE: OTA URL staged: " + _pendingOtaUrl);
 }
 
+void BLEConfigInterface::_stageSchedule(const uint8_t* payload, size_t len) {
+    if (len < 5) return;
+    memcpy(_pendingSchedule, payload, 5);
+    _scheduleReady = true;
+    Serial.printf("BLE: Schedule staged: enabled=%d on=%02d:%02d off=%02d:%02d\n",
+        payload[0], payload[1], payload[2], payload[3], payload[4]);
+}
+
 void BLEConfigInterface::_stageRainbow(bool active) {
     if (active) {
         _rainbowRequested = true;
@@ -294,6 +326,13 @@ void BLEConfigInterface::_dispatchStagedValues() {
         _display.setBrightness(_pendingBrightnessValue);
     }
 
+    if (_scheduleReady) {
+        _scheduleReady = false;
+        Serial.println("BLE: Dispatching schedule");
+        _display.setSchedule(_pendingSchedule, 5);
+        if (_pSchedule) _pSchedule->setValue(_pendingSchedule, 5);
+    }
+
     if (_otaRequested) {
         _otaRequested = false;
         Serial.println("BLE: Dispatching OTA update");
@@ -330,6 +369,7 @@ void BLEConfigInterface::_performOta(const String& url) {
     _pFirmwareVersion = nullptr;
     _pOtaControl = nullptr;
     _pRainbow = nullptr;
+    _pSchedule = nullptr;
 
     Serial.printf("OTA: Free heap after BLE deinit: %u bytes\n", ESP.getFreeHeap());
 
