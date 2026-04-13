@@ -14,3 +14,7 @@ void NeoPixelAdapter::show() {
 void NeoPixelAdapter::setBrightness(uint8_t brightness) {
     _strip.setBrightness(brightness);
 }
+
+void NeoPixelAdapter::clear() {
+    _strip.clear();
+}
