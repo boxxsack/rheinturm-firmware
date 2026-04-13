@@ -9,11 +9,24 @@ public:
     explicit TimeDisplay(ILedStrip& strip, uint16_t blinkRateMs = 500);
 
     // Call every loop tick. Renders BCD time display, or advances rainbow if active.
-    // Applies pending brightness.
+    // Applies pending brightness. Blanks LEDs (without touching stored brightness)
+    // when the current time falls outside the configured on/off window.
     void update(const tm& time);
 
     // Stores brightness — applied on next update() call.
     void setBrightness(uint8_t brightness);
+
+    // Applies and persists a 5-byte schedule payload:
+    //   [enabled, onHour, onMinute, offHour, offMinute]
+    // Silently ignores malformed payloads (length < 5, values out of range).
+    void setSchedule(const uint8_t* payload, size_t len);
+
+    // Loads the persisted schedule from NVS. Call once in setup().
+    void loadSchedule();
+
+    // Returns the current 5-byte schedule payload. Caller must provide a
+    // buffer of at least 5 bytes.
+    void getScheduleBytes(uint8_t out[5]) const;
 
     // Blocking rainbow animation (original style). Accepts an optional callback
     // invoked each color cycle (~2.5 s) so the caller can keep BLE dispatch alive.
@@ -73,8 +86,17 @@ private:
     static constexpr uint32_t COLOR_OFF        = 0;
     static constexpr uint32_t COLOR_TEAL       = (4u << 16) | (94u << 8) | 135u;
 
+    // Schedule
+    uint8_t _schedEnabled = 0;
+    uint8_t _schedOnH     = 8;
+    uint8_t _schedOnM     = 0;
+    uint8_t _schedOffH    = 23;
+    uint8_t _schedOffM    = 0;
+
     // Internal methods
     void _computeBcd(const tm& time);
     void _renderTime();
+    bool _isScheduleActive(const tm& time) const;
+    void _persistSchedule() const;
     static uint32_t _colorWheel(uint8_t position);
 };
