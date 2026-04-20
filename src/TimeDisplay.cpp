@@ -4,12 +4,11 @@
 
 constexpr TimeDisplay::BcdSegment TimeDisplay::SEGMENTS[6];
 
-TimeDisplay::TimeDisplay(ILedStrip& strip, uint16_t blinkRateMs)
+TimeDisplay::TimeDisplay(ILedStrip& strip)
     : _strip(strip)
     , _brightness(100)
     , _pendingBrightness(100)
     , _brightnessChanged(false)
-    , _blinkRateMs(blinkRateMs)
     , _rainbowCancelled(false)
 {
     memset(_ledState, 0, sizeof(_ledState));

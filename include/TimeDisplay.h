@@ -6,7 +6,7 @@
 
 class TimeDisplay {
 public:
-    explicit TimeDisplay(ILedStrip& strip, uint16_t blinkRateMs = 500);
+    explicit TimeDisplay(ILedStrip& strip);
 
     // Call every loop tick. Renders BCD time display, or advances rainbow if active.
     // Applies pending brightness. Blanks LEDs (without touching stored brightness)
@@ -61,10 +61,6 @@ private:
 
     // Rainbow cancellation (set from BLE task, checked in blocking loop)
     volatile bool _rainbowCancelled;
-
-    // Separator blink (legacy; superseded by _sepMode/_sepIntervalSeconds when
-    // mode == blink, but kept for the constructor default)
-    uint16_t _blinkRateMs;
 
     // Separator config (mode: 0=off, 1=on, 2=blink)
     uint8_t _sepMode = 2;
