@@ -25,6 +25,7 @@
 #define OTA_CONTROL_UUID      "4fafff08-1fb5-459e-8fcc-c5c9c331914b"
 #define RAINBOW_UUID          "4fafff09-1fb5-459e-8fcc-c5c9c331914b"
 #define SCHEDULE_UUID         "4fafff0a-1fb5-459e-8fcc-c5c9c331914b"
+#define SEPARATOR_CONFIG_UUID "4fafff0b-1fb5-459e-8fcc-c5c9c331914b"
 
 // --- BLE Callback Classes (private to this translation unit) ---
 
@@ -146,6 +147,21 @@ private:
     BLEConfigInterface& _owner;
 };
 
+class SeparatorConfigCallbacks : public BLECharacteristicCallbacks {
+public:
+    explicit SeparatorConfigCallbacks(BLEConfigInterface& owner) : _owner(owner) {}
+
+    void onWrite(BLECharacteristic* pChar) override {
+        std::string value = pChar->getValue();
+        if (value.length() >= 2) {
+            _owner._stageSeparatorConfig(reinterpret_cast<const uint8_t*>(value.data()), value.length());
+        }
+    }
+
+private:
+    BLEConfigInterface& _owner;
+};
+
 // --- BLEConfigInterface Implementation ---
 
 BLEConfigInterface::BLEConfigInterface(ConnectivityManager& connectivity, TimeDisplay& display)
@@ -204,6 +220,10 @@ void BLEConfigInterface::begin(const char* deviceName, const char* firmwareVersi
         SCHEDULE_UUID,
         BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE);
 
+    _pSeparatorConfig = pService->createCharacteristic(
+        SEPARATOR_CONFIG_UUID,
+        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE);
+
     _pSsid->setCallbacks(new SSIDCallbacks(*this));
     _pPassword->setCallbacks(new PasswordCallbacks(*this));
     _pScanState->setCallbacks(new ScanStateCallbacks(*this));
@@ -211,6 +231,7 @@ void BLEConfigInterface::begin(const char* deviceName, const char* firmwareVersi
     _pOtaControl->setCallbacks(new OtaControlCallbacks(*this));
     _pRainbow->setCallbacks(new RainbowCallbacks(*this));
     _pSchedule->setCallbacks(new ScheduleCallbacks(*this));
+    _pSeparatorConfig->setCallbacks(new SeparatorConfigCallbacks(*this));
 
     // Set initial values
     uint8_t initialBrightness = 100;
@@ -221,6 +242,9 @@ void BLEConfigInterface::begin(const char* deviceName, const char* firmwareVersi
     uint8_t scheduleBytes[5];
     _display.getScheduleBytes(scheduleBytes);
     _pSchedule->setValue(scheduleBytes, 5);
+    uint8_t separatorBytes[2];
+    _display.getSeparatorConfigBytes(separatorBytes);
+    _pSeparatorConfig->setValue(separatorBytes, 2);
 
     pService->start();
 
@@ -280,6 +304,14 @@ void BLEConfigInterface::_stageSchedule(const uint8_t* payload, size_t len) {
         payload[0], payload[1], payload[2], payload[3], payload[4]);
 }
 
+void BLEConfigInterface::_stageSeparatorConfig(const uint8_t* payload, size_t len) {
+    if (len < 2) return;
+    memcpy(_pendingSeparatorConfig, payload, 2);
+    _separatorConfigReady = true;
+    Serial.printf("BLE: Separator staged: mode=%u interval=%us\n",
+        payload[0], payload[1]);
+}
+
 void BLEConfigInterface::_stageRainbow(bool active) {
     if (active) {
         _rainbowRequested = true;
@@ -333,6 +365,13 @@ void BLEConfigInterface::_dispatchStagedValues() {
         if (_pSchedule) _pSchedule->setValue(_pendingSchedule, 5);
     }
 
+    if (_separatorConfigReady) {
+        _separatorConfigReady = false;
+        Serial.println("BLE: Dispatching separator config");
+        _display.setSeparatorConfig(_pendingSeparatorConfig, 2);
+        if (_pSeparatorConfig) _pSeparatorConfig->setValue(_pendingSeparatorConfig, 2);
+    }
+
     if (_otaRequested) {
         _otaRequested = false;
         Serial.println("BLE: Dispatching OTA update");
@@ -370,6 +409,7 @@ void BLEConfigInterface::_performOta(const String& url) {
     _pOtaControl = nullptr;
     _pRainbow = nullptr;
     _pSchedule = nullptr;
+    _pSeparatorConfig = nullptr;
 
     Serial.printf("OTA: Free heap after BLE deinit: %u bytes\n", ESP.getFreeHeap());
 

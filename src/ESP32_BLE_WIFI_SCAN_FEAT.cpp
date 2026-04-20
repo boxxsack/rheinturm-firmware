@@ -1,7 +1,7 @@
 #include <Arduino.h>
 #include <Adafruit_NeoPixel.h>
 
-#define FIRMWARE_VERSION "2.3.5"
+#define FIRMWARE_VERSION "2.4.0"
 
 #include "NeoPixelAdapter.h"
 #include "TimeDisplay.h"
@@ -38,6 +38,7 @@ void setup() {
     // Initialize modules
     connectivity.begin();
     display.loadSchedule();
+    display.loadSeparatorConfig();
     ble.begin("Rheinturm", FIRMWARE_VERSION);
 
     Serial.println("*****SETUP END*****");
