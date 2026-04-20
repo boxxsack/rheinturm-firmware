@@ -61,10 +61,10 @@ void loop() {
     if (hasTime) {
         time_t now = mktime(&currentTime);
 
-        // Only update display when time changes
+        display.update(currentTime);
+
         if (now != lastDisplayUpdate) {
             lastDisplayUpdate = now;
-            display.update(currentTime);
 
             // Hourly rainbow
             if (currentTime.tm_min == 0 && currentTime.tm_sec == 0) {
