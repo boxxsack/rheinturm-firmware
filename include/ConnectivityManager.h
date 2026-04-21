@@ -33,6 +33,10 @@ public:
     // After results are consumed, reconnection resumes on next tick().
     int checkScanResults();
 
+    // Erases WiFi credentials from NVS and disconnects WiFi immediately.
+    // Called from BLE when the user requests a WiFi reset.
+    void clearCredentials();
+
 private:
     // Configuration
     const char* _ntpServer = nullptr;
