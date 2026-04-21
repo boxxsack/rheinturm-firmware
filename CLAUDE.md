@@ -62,5 +62,5 @@ ConnectivityManager and TimeDisplay have no knowledge of BLE.
 - Partition scheme: `partitions_ota.csv` (dual OTA partitions — `ota_0` and `ota_1` at ~1.8MB each, enables over-the-air updates)
 - Dependencies: Adafruit NeoPixel v1.12.3, HTTPUpdate (included in ESP32 Arduino framework)
 - `#define DEBUG` enables serial debug output
-- `#define FIRMWARE_VERSION "2.4.0"` in main file — published releases on GitHub Releases
+- `#define FIRMWARE_VERSION "2.5.0"` in main file — published releases on GitHub Releases
 - Separator config persisted in NVS via Preferences (namespace: "separator", keys: "mode", "ival") — modes: 0=off, 1=on, 2=blink; intervalSeconds 1–60
