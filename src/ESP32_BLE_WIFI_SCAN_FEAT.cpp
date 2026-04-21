@@ -1,7 +1,7 @@
 #include <Arduino.h>
 #include <Adafruit_NeoPixel.h>
 
-#define FIRMWARE_VERSION "2.3.5"
+#define FIRMWARE_VERSION "2.5.0"
 
 #include "NeoPixelAdapter.h"
 #include "TimeDisplay.h"
@@ -38,6 +38,7 @@ void setup() {
     // Initialize modules
     connectivity.begin();
     display.loadSchedule();
+    display.loadSeparatorConfig();
     ble.begin("Rheinturm", FIRMWARE_VERSION);
 
     Serial.println("*****SETUP END*****");
@@ -61,10 +62,10 @@ void loop() {
     if (hasTime) {
         time_t now = mktime(&currentTime);
 
-        // Only update display when time changes
+        display.update(currentTime);
+
         if (now != lastDisplayUpdate) {
             lastDisplayUpdate = now;
-            display.update(currentTime);
 
             // Hourly rainbow
             if (currentTime.tm_min == 0 && currentTime.tm_sec == 0) {

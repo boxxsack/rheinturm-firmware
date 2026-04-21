@@ -36,6 +36,7 @@ public:
     void _stageOtaUrl(const char* url, size_t len);
     void _stageRainbow(bool active);
     void _stageSchedule(const uint8_t* payload, size_t len);
+    void _stageSeparatorConfig(const uint8_t* payload, size_t len);
 
     // Rainbow control — call from the main loop to drive the blocking animation.
     // Returns true once when a BLE client has requested a rainbow start.
@@ -62,6 +63,7 @@ private:
     BLECharacteristic* _pOtaControl = nullptr;
     BLECharacteristic* _pRainbow = nullptr;
     BLECharacteristic* _pSchedule = nullptr;
+    BLECharacteristic* _pSeparatorConfig = nullptr;
 
     // Connection state
     bool _clientConnected = false;
@@ -85,6 +87,10 @@ private:
     // Schedule state
     bool _scheduleReady = false;
     uint8_t _pendingSchedule[5] = {0, 8, 0, 23, 0};
+
+    // Separator config state
+    bool _separatorConfigReady = false;
+    uint8_t _pendingSeparatorConfig[2] = {2, 1};
 
     // Scan state machine
     enum class ScanPhase : uint8_t {

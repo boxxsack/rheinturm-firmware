@@ -6,7 +6,7 @@
 
 class TimeDisplay {
 public:
-    explicit TimeDisplay(ILedStrip& strip, uint16_t blinkRateMs = 500);
+    explicit TimeDisplay(ILedStrip& strip);
 
     // Call every loop tick. Renders BCD time display, or advances rainbow if active.
     // Applies pending brightness. Blanks LEDs (without touching stored brightness)
@@ -27,6 +27,19 @@ public:
     // Returns the current 5-byte schedule payload. Caller must provide a
     // buffer of at least 5 bytes.
     void getScheduleBytes(uint8_t out[5]) const;
+
+    // Applies and persists a 2-byte separator config payload:
+    //   [mode, intervalSeconds]   mode: 0=off, 1=on, 2=blink
+    //   intervalSeconds: 1–60 (full on/off cycle length when mode==blink)
+    // Silently ignores malformed payloads.
+    void setSeparatorConfig(const uint8_t* payload, size_t len);
+
+    // Loads the persisted separator config from NVS. Call once in setup().
+    void loadSeparatorConfig();
+
+    // Returns the current 2-byte separator config payload. Caller must provide
+    // a buffer of at least 2 bytes.
+    void getSeparatorConfigBytes(uint8_t out[2]) const;
 
     // Blocking rainbow animation (original style). Accepts an optional callback
     // invoked each color cycle (~2.5 s) so the caller can keep BLE dispatch alive.
@@ -49,8 +62,14 @@ private:
     // Rainbow cancellation (set from BLE task, checked in blocking loop)
     volatile bool _rainbowCancelled;
 
-    // Separator blink
-    uint16_t _blinkRateMs;
+    // Separator config (mode: 0=off, 1=on, 2=blink)
+    uint8_t _sepMode = 2;
+    uint8_t _sepIntervalSeconds = 1;
+    static constexpr uint8_t SEP_MODE_OFF   = 0;
+    static constexpr uint8_t SEP_MODE_ON    = 1;
+    static constexpr uint8_t SEP_MODE_BLINK = 2;
+    static constexpr uint8_t SEP_INTERVAL_MIN = 1;
+    static constexpr uint8_t SEP_INTERVAL_MAX = 60;
 
     // LED state array
     static constexpr uint8_t LED_COUNT = 41;
@@ -98,5 +117,7 @@ private:
     void _renderTime();
     bool _isScheduleActive(const tm& time) const;
     void _persistSchedule() const;
+    void _persistSeparatorConfig() const;
+    bool _separatorOn(uint32_t nowMs) const;
     static uint32_t _colorWheel(uint8_t position);
 };

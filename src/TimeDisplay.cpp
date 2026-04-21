@@ -4,12 +4,11 @@
 
 constexpr TimeDisplay::BcdSegment TimeDisplay::SEGMENTS[6];
 
-TimeDisplay::TimeDisplay(ILedStrip& strip, uint16_t blinkRateMs)
+TimeDisplay::TimeDisplay(ILedStrip& strip)
     : _strip(strip)
     , _brightness(100)
     , _pendingBrightness(100)
     , _brightnessChanged(false)
-    , _blinkRateMs(blinkRateMs)
     , _rainbowCancelled(false)
 {
     memset(_ledState, 0, sizeof(_ledState));
@@ -103,8 +102,7 @@ void TimeDisplay::_computeBcd(const tm& time) {
 }
 
 void TimeDisplay::_renderTime() {
-    uint32_t now = millis();
-    bool separatorOn = (now % _blinkRateMs) >= (_blinkRateMs / 2);
+    bool separatorOn = _separatorOn(millis());
 
     for (uint8_t i = 0; i < LED_COUNT; i++) {
         switch (_ledState[i]) {
@@ -123,6 +121,21 @@ void TimeDisplay::_renderTime() {
         }
     }
     _strip.show();
+}
+
+bool TimeDisplay::_separatorOn(uint32_t nowMs) const {
+    switch (_sepMode) {
+    case SEP_MODE_OFF:
+        return false;
+    case SEP_MODE_ON:
+        return true;
+    case SEP_MODE_BLINK:
+    default: {
+        uint32_t periodMs = static_cast<uint32_t>(_sepIntervalSeconds) * 1000u;
+        if (periodMs == 0) return true;
+        return (nowMs % periodMs) >= (periodMs / 2u);
+    }
+    }
 }
 
 void TimeDisplay::setSchedule(const uint8_t* payload, size_t len) {
@@ -177,6 +190,42 @@ void TimeDisplay::_persistSchedule() const {
     prefs.putUChar("onM",  _schedOnM);
     prefs.putUChar("offH", _schedOffH);
     prefs.putUChar("offM", _schedOffM);
+    prefs.end();
+}
+
+void TimeDisplay::setSeparatorConfig(const uint8_t* payload, size_t len) {
+    if (len < 2) return;
+    if (payload[0] > SEP_MODE_BLINK) return;
+    if (payload[1] < SEP_INTERVAL_MIN || payload[1] > SEP_INTERVAL_MAX) return;
+    _sepMode = payload[0];
+    _sepIntervalSeconds = payload[1];
+    _persistSeparatorConfig();
+    Serial.printf("Separator set: mode=%u interval=%us\n", _sepMode, _sepIntervalSeconds);
+}
+
+void TimeDisplay::loadSeparatorConfig() {
+    Preferences prefs;
+    prefs.begin("separator", true);
+    _sepMode = prefs.getUChar("mode", SEP_MODE_BLINK);
+    _sepIntervalSeconds = prefs.getUChar("ival", 1);
+    prefs.end();
+    if (_sepMode > SEP_MODE_BLINK) _sepMode = SEP_MODE_BLINK;
+    if (_sepIntervalSeconds < SEP_INTERVAL_MIN || _sepIntervalSeconds > SEP_INTERVAL_MAX) {
+        _sepIntervalSeconds = 1;
+    }
+    Serial.printf("Separator loaded: mode=%u interval=%us\n", _sepMode, _sepIntervalSeconds);
+}
+
+void TimeDisplay::getSeparatorConfigBytes(uint8_t out[2]) const {
+    out[0] = _sepMode;
+    out[1] = _sepIntervalSeconds;
+}
+
+void TimeDisplay::_persistSeparatorConfig() const {
+    Preferences prefs;
+    prefs.begin("separator", false);
+    prefs.putUChar("mode", _sepMode);
+    prefs.putUChar("ival", _sepIntervalSeconds);
     prefs.end();
 }
 
