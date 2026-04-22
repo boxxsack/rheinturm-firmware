@@ -177,6 +177,24 @@ bool ConnectivityManager::_checkTimeValid() {
     return timeinfo.tm_year > MIN_VALID_YEAR;
 }
 
+void ConnectivityManager::clearCredentials() {
+    _ssid = "";
+    _password = "";
+    _hasCredentials = false;
+
+    Preferences prefs;
+    prefs.begin("credentials", false);
+    prefs.remove("ssid");
+    prefs.remove("password");
+    prefs.end();
+
+    WiFi.disconnect();
+    _state = ConnectivityState::DISCONNECTED;
+    _hasValidTime = false;
+    _connectRequested = false;
+    Serial.println("ConnectivityManager: WiFi credentials cleared");
+}
+
 void ConnectivityManager::_loadCredentials() {
     Preferences prefs;
     prefs.begin("credentials", true);  // read-only

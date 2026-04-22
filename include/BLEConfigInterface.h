@@ -37,6 +37,7 @@ public:
     void _stageRainbow(bool active);
     void _stageSchedule(const uint8_t* payload, size_t len);
     void _stageSeparatorConfig(const uint8_t* payload, size_t len);
+    void _stageWifiReset();
 
     // Rainbow control — call from the main loop to drive the blocking animation.
     // Returns true once when a BLE client has requested a rainbow start.
@@ -64,6 +65,7 @@ private:
     BLECharacteristic* _pRainbow = nullptr;
     BLECharacteristic* _pSchedule = nullptr;
     BLECharacteristic* _pSeparatorConfig = nullptr;
+    BLECharacteristic* _pWifiReset = nullptr;
 
     // Connection state
     bool _clientConnected = false;
@@ -91,6 +93,9 @@ private:
     // Separator config state
     bool _separatorConfigReady = false;
     uint8_t _pendingSeparatorConfig[2] = {2, 1};
+
+    // WiFi reset state
+    bool _wifiResetRequested = false;
 
     // Scan state machine
     enum class ScanPhase : uint8_t {
@@ -122,4 +127,5 @@ private:
     void _handleAdvertisingRestart();
     void _syncConfState();
     void _performOta(const String& url);
+    void _performWifiReset();
 };

@@ -26,6 +26,7 @@
 #define RAINBOW_UUID          "4fafff09-1fb5-459e-8fcc-c5c9c331914b"
 #define SCHEDULE_UUID         "4fafff0a-1fb5-459e-8fcc-c5c9c331914b"
 #define SEPARATOR_CONFIG_UUID "4fafff0b-1fb5-459e-8fcc-c5c9c331914b"
+#define CONF_WIFI_RESET_UUID  "4fafff0c-1fb5-459e-8fcc-c5c9c331914b"
 
 // --- BLE Callback Classes (private to this translation unit) ---
 
@@ -162,6 +163,21 @@ private:
     BLEConfigInterface& _owner;
 };
 
+class WifiResetCallbacks : public BLECharacteristicCallbacks {
+public:
+    explicit WifiResetCallbacks(BLEConfigInterface& owner) : _owner(owner) {}
+
+    void onWrite(BLECharacteristic* pChar) override {
+        std::string value = pChar->getValue();
+        if (String(value.c_str()) == "reset-wifi") {
+            _owner._stageWifiReset();
+        }
+    }
+
+private:
+    BLEConfigInterface& _owner;
+};
+
 // --- BLEConfigInterface Implementation ---
 
 BLEConfigInterface::BLEConfigInterface(ConnectivityManager& connectivity, TimeDisplay& display)
@@ -178,7 +194,7 @@ void BLEConfigInterface::begin(const char* deviceName, const char* firmwareVersi
     _pServer->setCallbacks(new ServerCallbacks(*this));
 
     static BLEUUID serviceUUID(SERVICE_UUID);
-    BLEService* pService = _pServer->createService(serviceUUID, 40, 0);
+    BLEService* pService = _pServer->createService(serviceUUID, 50, 0);
 
     _pConfState = pService->createCharacteristic(
         CONF_STATE_UUID,
@@ -224,6 +240,10 @@ void BLEConfigInterface::begin(const char* deviceName, const char* firmwareVersi
         SEPARATOR_CONFIG_UUID,
         BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE);
 
+    _pWifiReset = pService->createCharacteristic(
+        CONF_WIFI_RESET_UUID,
+        BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_NOTIFY);
+
     _pSsid->setCallbacks(new SSIDCallbacks(*this));
     _pPassword->setCallbacks(new PasswordCallbacks(*this));
     _pScanState->setCallbacks(new ScanStateCallbacks(*this));
@@ -232,6 +252,7 @@ void BLEConfigInterface::begin(const char* deviceName, const char* firmwareVersi
     _pRainbow->setCallbacks(new RainbowCallbacks(*this));
     _pSchedule->setCallbacks(new ScheduleCallbacks(*this));
     _pSeparatorConfig->setCallbacks(new SeparatorConfigCallbacks(*this));
+    _pWifiReset->setCallbacks(new WifiResetCallbacks(*this));
 
     // Set initial values
     uint8_t initialBrightness = 100;
@@ -312,6 +333,21 @@ void BLEConfigInterface::_stageSeparatorConfig(const uint8_t* payload, size_t le
         payload[0], payload[1]);
 }
 
+void BLEConfigInterface::_stageWifiReset() {
+    _wifiResetRequested = true;
+    Serial.println("BLE: WiFi reset staged");
+}
+
+void BLEConfigInterface::_performWifiReset() {
+    Serial.println("BLE: Resetting WiFi credentials");
+    _connectivity.clearCredentials();
+    if (_pWifiReset) {
+        _pWifiReset->setValue("reset-ok");
+        _pWifiReset->notify();
+    }
+    Serial.println("BLE: WiFi reset complete, notified reset-ok");
+}
+
 void BLEConfigInterface::_stageRainbow(bool active) {
     if (active) {
         _rainbowRequested = true;
@@ -377,6 +413,11 @@ void BLEConfigInterface::_dispatchStagedValues() {
         Serial.println("BLE: Dispatching OTA update");
         _performOta(_pendingOtaUrl);
     }
+
+    if (_wifiResetRequested) {
+        _wifiResetRequested = false;
+        _performWifiReset();
+    }
 }
 
 void BLEConfigInterface::_performOta(const String& url) {
@@ -410,6 +451,7 @@ void BLEConfigInterface::_performOta(const String& url) {
     _pRainbow = nullptr;
     _pSchedule = nullptr;
     _pSeparatorConfig = nullptr;
+    _pWifiReset = nullptr;
 
     Serial.printf("OTA: Free heap after BLE deinit: %u bytes\n", ESP.getFreeHeap());
 
