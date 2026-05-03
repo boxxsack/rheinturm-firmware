@@ -51,6 +51,10 @@ public:
     // Show OTA update progress on LEDs (0-100%). Fills LEDs proportionally in teal.
     void showOtaProgress(uint8_t percent);
 
+    // True when the display should currently be lit: either schedule is disabled,
+    // or the given time falls inside the configured on-window.
+    bool isScheduleActive(const tm& time) const;
+
 private:
     ILedStrip& _strip;
 
@@ -115,7 +119,6 @@ private:
     // Internal methods
     void _computeBcd(const tm& time);
     void _renderTime();
-    bool _isScheduleActive(const tm& time) const;
     void _persistSchedule() const;
     void _persistSeparatorConfig() const;
     bool _separatorOn(uint32_t nowMs) const;

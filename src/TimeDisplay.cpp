@@ -26,7 +26,7 @@ void TimeDisplay::update(const tm& time) {
 
     // If outside the scheduled on-window, blank the display without altering
     // the stored brightness so re-entering the window restores it automatically.
-    if (!_isScheduleActive(time)) {
+    if (!isScheduleActive(time)) {
         _strip.clear();
         _strip.show();
         return;
@@ -172,7 +172,7 @@ void TimeDisplay::getScheduleBytes(uint8_t out[5]) const {
     out[4] = _schedOffM;
 }
 
-bool TimeDisplay::_isScheduleActive(const tm& time) const {
+bool TimeDisplay::isScheduleActive(const tm& time) const {
     if (!_schedEnabled) return true;
     int now = time.tm_hour * 60 + time.tm_min;
     int on  = _schedOnH  * 60 + _schedOnM;

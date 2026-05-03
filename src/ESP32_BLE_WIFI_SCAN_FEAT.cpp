@@ -1,7 +1,7 @@
 #include <Arduino.h>
 #include <Adafruit_NeoPixel.h>
 
-#define FIRMWARE_VERSION "2.6.0"
+#define FIRMWARE_VERSION "2.6.1"
 
 #include "NeoPixelAdapter.h"
 #include "TimeDisplay.h"
@@ -67,10 +67,12 @@ void loop() {
         if (now != lastDisplayUpdate) {
             lastDisplayUpdate = now;
 
-            // Hourly rainbow
+            // Hourly rainbow — skip when schedule has the display in its off-window
             if (currentTime.tm_min == 0 && currentTime.tm_sec == 0) {
                 if (!midnightRainbowTriggered) {
-                    display.playRainbow(60000, []() { ble.tick(); });
+                    if (display.isScheduleActive(currentTime)) {
+                        display.playRainbow(60000, []() { ble.tick(); });
+                    }
                     midnightRainbowTriggered = true;
                 }
             } else {
