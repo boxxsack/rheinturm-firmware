@@ -198,7 +198,13 @@ void BLEConfigInterface::begin(const char* deviceName, const char* firmwareVersi
     // defeating passive eavesdropping of the WiFi password and casual
     // unauthorized writes. It does not defend against an active MITM during the
     // pairing handshake — see SECURITY_REVIEW.md for the passkey-display upgrade.
-    BLEDevice::setEncryptionLevel(ESP_BLE_SEC_ENCRYPT);
+    //
+    // Pairing is triggered lazily by the ESP_GATT_PERM_*_ENCRYPTED permissions
+    // below, on first access to an encrypted characteristic. We deliberately do
+    // NOT call BLEDevice::setEncryptionLevel(): that makes the library force
+    // encryption on every connect (esp_ble_set_encryption in the connect event),
+    // which produces a second, redundant pairing prompt on top of the
+    // permission-triggered one. One trigger = one dialog.
     BLESecurity* pSecurity = new BLESecurity();
     pSecurity->setAuthenticationMode(ESP_LE_AUTH_REQ_SC_BOND);
     pSecurity->setCapability(ESP_IO_CAP_NONE);
