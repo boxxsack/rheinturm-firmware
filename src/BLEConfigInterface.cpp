@@ -2,11 +2,13 @@
 #include "ConnectivityManager.h"
 #include "TimeDisplay.h"
 #include "ConnectivityState.h"
+#include "GitHubRootCerts.h"
 
 #include <BLEDevice.h>
 #include <BLEUtils.h>
 #include <BLEServer.h>
 #include <BLE2902.h>
+#include <BLESecurity.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
@@ -190,6 +192,25 @@ BLEConfigInterface::BLEConfigInterface(ConnectivityManager& connectivity, TimeDi
 void BLEConfigInterface::begin(const char* deviceName, const char* firmwareVersion) {
     BLEDevice::init(deviceName);
 
+    // Require an encrypted, bonded BLE link before the security-sensitive
+    // characteristics (WiFi credentials, OTA trigger, WiFi reset) can be used.
+    // "Just Works" pairing (no I/O capability) gives link encryption + bonding,
+    // defeating passive eavesdropping of the WiFi password and casual
+    // unauthorized writes. It does not defend against an active MITM during the
+    // pairing handshake — see SECURITY_REVIEW.md for the passkey-display upgrade.
+    //
+    // Pairing is triggered lazily by the ESP_GATT_PERM_*_ENCRYPTED permissions
+    // below, on first access to an encrypted characteristic. We deliberately do
+    // NOT call BLEDevice::setEncryptionLevel(): that makes the library force
+    // encryption on every connect (esp_ble_set_encryption in the connect event),
+    // which produces a second, redundant pairing prompt on top of the
+    // permission-triggered one. One trigger = one dialog.
+    BLESecurity* pSecurity = new BLESecurity();
+    pSecurity->setAuthenticationMode(ESP_LE_AUTH_REQ_SC_BOND);
+    pSecurity->setCapability(ESP_IO_CAP_NONE);
+    pSecurity->setInitEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
+    pSecurity->setRespEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
+
     _pServer = BLEDevice::createServer();
     _pServer->setCallbacks(new ServerCallbacks(*this));
 
@@ -253,6 +274,16 @@ void BLEConfigInterface::begin(const char* deviceName, const char* firmwareVersi
     _pSchedule->setCallbacks(new ScheduleCallbacks(*this));
     _pSeparatorConfig->setCallbacks(new SeparatorConfigCallbacks(*this));
     _pWifiReset->setCallbacks(new WifiResetCallbacks(*this));
+
+    // Gate the security-sensitive characteristics behind link encryption. A peer
+    // must pair/bond before it can submit WiFi credentials, trigger an OTA, or
+    // reset WiFi. Status/control characteristics stay open for read access.
+    const esp_gatt_perm_t encPerm = static_cast<esp_gatt_perm_t>(
+        ESP_GATT_PERM_READ_ENCRYPTED | ESP_GATT_PERM_WRITE_ENCRYPTED);
+    _pSsid->setAccessPermissions(encPerm);
+    _pPassword->setAccessPermissions(encPerm);
+    _pOtaControl->setAccessPermissions(encPerm);
+    _pWifiReset->setAccessPermissions(encPerm);
 
     // Set initial values
     uint8_t initialBrightness = 100;
@@ -464,7 +495,9 @@ void BLEConfigInterface::_performOta(const String& url) {
     String resolvedUrl = url;
     {
         WiFiClientSecure resolveClient;
-        resolveClient.setInsecure();
+        // Verify the GitHub TLS chain against pinned roots — a network MITM must
+        // not be able to redirect the device to an attacker-controlled host.
+        resolveClient.setCACert(GITHUB_OTA_ROOT_CA_BUNDLE);
         HTTPClient resolveHttp;
         resolveHttp.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
         if (resolveHttp.begin(resolveClient, url)) {
@@ -481,7 +514,10 @@ void BLEConfigInterface::_performOta(const String& url) {
     }
 
     WiFiClientSecure client;
-    client.setInsecure();
+    // Verify the firmware host's TLS chain against pinned roots. On failure the
+    // update aborts (HTTP_UPDATE_FAILED below restarts) rather than flashing an
+    // unverified image — fail closed.
+    client.setCACert(GITHUB_OTA_ROOT_CA_BUNDLE);
 
     // Redirects already resolved above — disable further redirect following.
     httpUpdate.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
