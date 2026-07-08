@@ -265,6 +265,15 @@ void BLEConfigInterface::begin(const char* deviceName, const char* firmwareVersi
         CONF_WIFI_RESET_UUID,
         BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_NOTIFY);
 
+    // Bluedroid does not auto-create a CCCD (0x2902) from the NOTIFY property
+    // bit; without one, iOS rejects subscription attempts with
+    // CBATTErrorInvalidHandle and clients silently fall back to polling.
+    _pConfState->addDescriptor(new BLE2902());
+    _pScanList->addDescriptor(new BLE2902());
+    _pBrightness->addDescriptor(new BLE2902());
+    _pOtaControl->addDescriptor(new BLE2902());
+    _pWifiReset->addDescriptor(new BLE2902());
+
     _pSsid->setCallbacks(new SSIDCallbacks(*this));
     _pPassword->setCallbacks(new PasswordCallbacks(*this));
     _pScanState->setCallbacks(new ScanStateCallbacks(*this));
