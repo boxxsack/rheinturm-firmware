@@ -13,7 +13,8 @@ class BLEConfigInterface {
 public:
     BLEConfigInterface(ConnectivityManager& connectivity, TimeDisplay& display);
 
-    // Call once in setup(). Creates BLE server, service, characteristics, starts advertising.
+    // Call once in setup(). Creates BLE server, service, characteristics (with
+    // CCCD descriptors on the NOTIFY ones), starts advertising.
     void begin(const char* deviceName = "Rheinturm", const char* firmwareVersion = "0.0.0");
 
     // Call every loop() iteration. Non-blocking. Drives:
