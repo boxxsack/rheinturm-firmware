@@ -77,23 +77,40 @@ peer authentication requires the passkey-display upgrade in the hardening note b
 
 ---
 
-## Finding 3 — No firmware image signing / secure boot (MEDIUM, recommend-only)
+## Finding 3 — No firmware image signing / secure boot (MEDIUM)
 
-**Location:** `src/BLEConfigInterface.cpp:496` (`httpUpdate.update()`); `platformio.ini` (no
-secure-boot / signed-image build configuration).
+**Location:** `src/BLEConfigInterface.cpp` `_performOta()` / `_downloadFlashAndHash()`;
+`include/OtaSigningKey.h`; `src/OtaImageVerifier.cpp`.
 
 **OWASP:** A08 Software or Data Integrity Failures.
 
-**Description:** Firmware authenticity rests entirely on the transport. Once Finding 1 is fixed,
-TLS to GitHub provides authenticity in transit, but there is still no cryptographic verification
-of the image itself (no signed-image check, no ESP32 Secure Boot). Any path that delivers a
-malformed or malicious image — a future TLS regression, a compromised release asset, or a
-build/release-pipeline compromise — flashes unverified code.
+**Description:** Firmware authenticity previously rested entirely on the transport. Even with
+Finding 1 fixed, TLS to GitHub only provides authenticity in transit — a future TLS regression, a
+compromised release asset, or a compromised build/release pipeline could still deliver an
+unverified image with nothing left to stop it from being flashed.
 
-**Recommendation (not implemented — documented for a follow-up):** Adopt signed OTA images
-(`Update.h` signature verification with an embedded public key) and/or enable ESP32 Secure Boot
-v2 + Flash Encryption. This is defense-in-depth that holds even if the transport is compromised.
-Deferred because it requires key management and an irreversible eFuse step on hardware.
+**Fix (implemented in this branch, issue #17):** The device now verifies an RSA-2048
+RSASSA-PKCS1-v1.5/SHA-256 signature over the firmware image before activating it, independent of
+the transport TLS check. The release pipeline (`.github/workflows/release.yml`,
+`scripts/sign_firmware.py`) signs `firmware.bin` with a private key held only as the
+`OTA_SIGNING_PRIVATE_KEY` GitHub Actions secret, and publishes the signature as a
+`firmware.bin.sig` release asset. The device derives the signature URL from the firmware URL
+(`<url>.sig`) — no BLE protocol or app change was needed.
+
+`_downloadFlashAndHash` streams the firmware image in a single HTTP GET, feeding each chunk to
+both `Update.write()` (the inactive OTA partition) and a running SHA-256 hash — the exact bytes
+written to flash are the exact bytes verified, with no window for the two to diverge. Only after
+`OtaImageVerifier::verify()` (mbedtls) passes does the code call `Update.end()`, which marks the
+partition bootable; on any mismatch `Update.abort()` runs instead and the previous firmware stays
+active. An earlier version of this fix hashed the image via a *separate* HTTP GET from the one
+that flashed it (effectively via `httpUpdate.update()`) — a design with a TOCTOU gap between the
+verified and flashed bytes across two independent downloads. That was caught in review and fixed
+before merge; the single-fetch design above closes it. See `test/test_ota_image_verifier` for a
+reproduction that signs/tampers/verifies against the real verification code.
+
+ESP32 Secure Boot v2 + Flash Encryption (hardware root of trust) remains a possible future
+upgrade but is intentionally not adopted here: it requires burning eFuses (irreversible) with
+real bricking risk, which the signed-image approach avoids while still closing the gap.
 
 ---
 
@@ -112,4 +129,4 @@ change.
 |---|---------|----------|-------------|
 | 1 | OTA TLS verification disabled | HIGH | Fixed |
 | 2 | No BLE authentication/encryption | HIGH | Mitigated (link encryption + bonding; no peer authentication — see Finding 2) |
-| 3 | No firmware image signing / secure boot | MEDIUM | Documented, deferred |
+| 3 | No firmware image signing / secure boot | MEDIUM | Fixed (RSA-2048 signed OTA images, issue #17) |
