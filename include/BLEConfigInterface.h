@@ -130,6 +130,6 @@ private:
     void _performOta(const String& url);
     String _resolveRedirect(const String& url);
     bool _fetchOtaSignature(const String& signatureUrl, uint8_t* signatureOut, size_t signatureLen);
-    bool _sha256OverHttp(const String& url, uint8_t digestOut[32]);
+    bool _downloadFlashAndHash(const String& url, uint8_t digestOut[32]);
     void _performWifiReset();
 };

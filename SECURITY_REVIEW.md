@@ -79,8 +79,8 @@ peer authentication requires the passkey-display upgrade in the hardening note b
 
 ## Finding 3 — No firmware image signing / secure boot (MEDIUM)
 
-**Location:** `src/BLEConfigInterface.cpp` `_performOta()`; `include/OtaSigningKey.h`;
-`src/OtaImageVerifier.cpp`.
+**Location:** `src/BLEConfigInterface.cpp` `_performOta()` / `_downloadFlashAndHash()`;
+`include/OtaSigningKey.h`; `src/OtaImageVerifier.cpp`.
 
 **OWASP:** A08 Software or Data Integrity Failures.
 
@@ -90,16 +90,23 @@ compromised release asset, or a compromised build/release pipeline could still d
 unverified image with nothing left to stop it from being flashed.
 
 **Fix (implemented in this branch, issue #17):** The device now verifies an RSA-2048
-RSASSA-PKCS1-v1.5/SHA-256 signature over the firmware image before flashing it, independent of
+RSASSA-PKCS1-v1.5/SHA-256 signature over the firmware image before activating it, independent of
 the transport TLS check. The release pipeline (`.github/workflows/release.yml`,
 `scripts/sign_firmware.py`) signs `firmware.bin` with a private key held only as the
 `OTA_SIGNING_PRIVATE_KEY` GitHub Actions secret, and publishes the signature as a
 `firmware.bin.sig` release asset. The device derives the signature URL from the firmware URL
-(`<url>.sig`) — no BLE protocol or app change was needed. Verification (`OtaImageVerifier::verify`,
-using mbedtls) happens after downloading the image to compute its SHA-256 digest but before
-`httpUpdate.update()` is ever called; an unsigned or mismatched image is never flashed. See
-`test/test_ota_image_verifier` for a reproduction that signs/tampers/verifies against the real
-verification code.
+(`<url>.sig`) — no BLE protocol or app change was needed.
+
+`_downloadFlashAndHash` streams the firmware image in a single HTTP GET, feeding each chunk to
+both `Update.write()` (the inactive OTA partition) and a running SHA-256 hash — the exact bytes
+written to flash are the exact bytes verified, with no window for the two to diverge. Only after
+`OtaImageVerifier::verify()` (mbedtls) passes does the code call `Update.end()`, which marks the
+partition bootable; on any mismatch `Update.abort()` runs instead and the previous firmware stays
+active. An earlier version of this fix hashed the image via a *separate* HTTP GET from the one
+that flashed it (effectively via `httpUpdate.update()`) — a design with a TOCTOU gap between the
+verified and flashed bytes across two independent downloads. That was caught in review and fixed
+before merge; the single-fetch design above closes it. See `test/test_ota_image_verifier` for a
+reproduction that signs/tampers/verifies against the real verification code.
 
 ESP32 Secure Boot v2 + Flash Encryption (hardware root of trust) remains a possible future
 upgrade but is intentionally not adopted here: it requires burning eFuses (irreversible) with
