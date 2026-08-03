@@ -3,6 +3,8 @@
 #include "TimeDisplay.h"
 #include "ConnectivityState.h"
 #include "GitHubRootCerts.h"
+#include "OtaSigningKey.h"
+#include "OtaImageVerifier.h"
 
 #include <BLEDevice.h>
 #include <BLEUtils.h>
@@ -14,6 +16,8 @@
 #include <HTTPClient.h>
 #include <HTTPUpdate.h>
 #include <Arduino.h>
+#include <mbedtls/md.h>
+#include <algorithm>
 
 // BLE UUIDs
 #define SERVICE_UUID          "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
@@ -501,26 +505,41 @@ void BLEConfigInterface::_performOta(const String& url) {
     // Resolve any redirect (e.g. github.com → objects.githubusercontent.com) before
     // the actual update. HTTPUpdate reuses the same WiFiClientSecure socket and cannot
     // switch hosts mid-redirect, so we pre-resolve with a short-lived HTTPClient.
-    String resolvedUrl = url;
-    {
-        WiFiClientSecure resolveClient;
-        // Verify the GitHub TLS chain against pinned roots — a network MITM must
-        // not be able to redirect the device to an attacker-controlled host.
-        resolveClient.setCACert(GITHUB_OTA_ROOT_CA_BUNDLE);
-        HTTPClient resolveHttp;
-        resolveHttp.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
-        if (resolveHttp.begin(resolveClient, url)) {
-            int code = resolveHttp.GET();
-            if (code == 301 || code == 302 || code == 307 || code == 308) {
-                String location = resolveHttp.getLocation();
-                if (location.length() > 0) {
-                    resolvedUrl = location;
-                    Serial.println("OTA: Resolved URL: " + resolvedUrl);
-                }
-            }
-            resolveHttp.end();
-        }
+    String resolvedUrl = _resolveRedirect(url);
+
+    // --- Image-signature verification (issue #17) ---
+    // Independent of the transport TLS check above: reject an unsigned or
+    // mismatched image before it is ever written to flash. The signature is
+    // published as a release asset alongside firmware.bin, named
+    // "<firmware>.sig" (see scripts/sign_firmware.py and
+    // .github/workflows/release.yml). This costs a second full download of
+    // firmware.bin (to hash it) but needs no extra flash/heap buffering.
+    Serial.println("OTA: Verifying firmware signature before flashing...");
+    uint8_t signature[OtaImageVerifier::kRsa2048SignatureSize];
+    String resolvedSigUrl = _resolveRedirect(url + ".sig");
+    if (!_fetchOtaSignature(resolvedSigUrl, signature, sizeof(signature))) {
+        Serial.println("OTA: Failed to fetch signature, refusing to flash. Restarting...");
+        delay(1000);
+        ESP.restart();
+        return;
     }
+
+    uint8_t digest[OtaImageVerifier::kSha256DigestSize];
+    if (!_sha256OverHttp(resolvedUrl, digest)) {
+        Serial.println("OTA: Failed to hash firmware for signature check, refusing to flash. Restarting...");
+        delay(1000);
+        ESP.restart();
+        return;
+    }
+
+    if (!OtaImageVerifier::verify(digest, signature, sizeof(signature), OTA_SIGNING_PUBLIC_KEY)) {
+        Serial.println("OTA: Signature verification FAILED — refusing to flash. Restarting...");
+        delay(1000);
+        ESP.restart();
+        return;
+    }
+    Serial.println("OTA: Signature verified OK, proceeding to flash");
+    // --- end image-signature verification ---
 
     WiFiClientSecure client;
     // Verify the firmware host's TLS chain against pinned roots. On failure the
@@ -562,6 +581,137 @@ void BLEConfigInterface::_performOta(const String& url) {
             ESP.restart();
             break;
     }
+}
+
+String BLEConfigInterface::_resolveRedirect(const String& url) {
+    String resolvedUrl = url;
+    WiFiClientSecure resolveClient;
+    // Verify the GitHub TLS chain against pinned roots — a network MITM must
+    // not be able to redirect the device to an attacker-controlled host.
+    resolveClient.setCACert(GITHUB_OTA_ROOT_CA_BUNDLE);
+    HTTPClient resolveHttp;
+    resolveHttp.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
+    if (resolveHttp.begin(resolveClient, url)) {
+        int code = resolveHttp.GET();
+        if (code == 301 || code == 302 || code == 307 || code == 308) {
+            String location = resolveHttp.getLocation();
+            if (location.length() > 0) {
+                resolvedUrl = location;
+                Serial.println("OTA: Resolved URL: " + resolvedUrl);
+            }
+        }
+        resolveHttp.end();
+    }
+    return resolvedUrl;
+}
+
+bool BLEConfigInterface::_fetchOtaSignature(const String& signatureUrl, uint8_t* signatureOut, size_t signatureLen) {
+    WiFiClientSecure client;
+    client.setCACert(GITHUB_OTA_ROOT_CA_BUNDLE);
+
+    HTTPClient http;
+    http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
+    if (!http.begin(client, signatureUrl)) {
+        Serial.println("OTA: Could not open signature URL: " + signatureUrl);
+        return false;
+    }
+
+    int code = http.GET();
+    if (code != HTTP_CODE_OK) {
+        Serial.printf("OTA: Signature fetch failed, HTTP %d\n", code);
+        http.end();
+        return false;
+    }
+
+    int len = http.getSize();
+    if (len != static_cast<int>(signatureLen)) {
+        Serial.printf("OTA: Signature size mismatch: expected %u, got %d\n", (unsigned)signatureLen, len);
+        http.end();
+        return false;
+    }
+
+    WiFiClient* stream = http.getStreamPtr();
+    size_t received = 0;
+    int stallCount = 0;
+    while (received < signatureLen && stallCount < 300) {
+        size_t avail = stream->available();
+        if (avail == 0) {
+            stallCount++;
+            delay(100);
+            continue;
+        }
+        stallCount = 0;
+        int read = stream->readBytes(signatureOut + received, std::min(avail, signatureLen - received));
+        if (read <= 0) break;
+        received += read;
+    }
+    http.end();
+
+    if (received != signatureLen) {
+        Serial.println("OTA: Signature download incomplete");
+        return false;
+    }
+    return true;
+}
+
+bool BLEConfigInterface::_sha256OverHttp(const String& url, uint8_t digestOut[32]) {
+    WiFiClientSecure client;
+    client.setCACert(GITHUB_OTA_ROOT_CA_BUNDLE);
+
+    HTTPClient http;
+    http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
+    if (!http.begin(client, url)) {
+        Serial.println("OTA: Could not open firmware URL for hashing: " + url);
+        return false;
+    }
+
+    int code = http.GET();
+    if (code != HTTP_CODE_OK) {
+        Serial.printf("OTA: Firmware fetch (for hashing) failed, HTTP %d\n", code);
+        http.end();
+        return false;
+    }
+
+    int len = http.getSize();
+    if (len <= 0) {
+        Serial.println("OTA: Firmware content length unknown, cannot hash");
+        http.end();
+        return false;
+    }
+
+    mbedtls_md_context_t ctx;
+    mbedtls_md_init(&ctx);
+    mbedtls_md_setup(&ctx, mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), 0);
+    mbedtls_md_starts(&ctx);
+
+    WiFiClient* stream = http.getStreamPtr();
+    uint8_t buf[512];
+    size_t remaining = static_cast<size_t>(len);
+    int stallCount = 0;
+    while (remaining > 0 && stallCount < 300) {
+        size_t avail = stream->available();
+        if (avail == 0) {
+            stallCount++;
+            delay(100);
+            continue;
+        }
+        stallCount = 0;
+        size_t toRead = std::min({avail, remaining, sizeof(buf)});
+        int read = stream->readBytes(buf, toRead);
+        if (read <= 0) break;
+        mbedtls_md_update(&ctx, buf, read);
+        remaining -= read;
+    }
+    http.end();
+
+    mbedtls_md_finish(&ctx, digestOut);
+    mbedtls_md_free(&ctx);
+
+    if (remaining != 0) {
+        Serial.println("OTA: Firmware download incomplete during hashing");
+        return false;
+    }
+    return true;
 }
 
 void BLEConfigInterface::_advanceScanStateMachine() {
