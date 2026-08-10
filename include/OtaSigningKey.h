@@ -14,7 +14,7 @@
 // include/OtaImageVerifier.h) before the downloaded image is flashed.
 //
 // SHA-256 fingerprint of this public key (DER-encoded SubjectPublicKeyInfo):
-//   eb9ab26d5a78decb7c130245a0fd0ff8ad228596a137da1cfd0e147c1ec64b4
+//   b42360232b85c868510b63b95e123800708d1a16fc489855c3695f76559bcaef
 //
 // To rotate this key: generate a new RSA-2048 keypair, replace the PEM below,
 // update the `OTA_SIGNING_PRIVATE_KEY` secret, and ship a release signed with
