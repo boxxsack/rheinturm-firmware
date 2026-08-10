@@ -22,12 +22,12 @@
 // key (otherwise devices on old firmware can no longer verify new releases).
 static const char *OTA_SIGNING_PUBLIC_KEY = R"PEM(
 -----BEGIN PUBLIC KEY-----
-MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsGBAJv1SUCq0Pey4CwK9
-jhK2lADVqdX9EyLZoV1u3ApxsRfbXUZwYPj0lB52teAUIoo0BhVLqan0i3M3lwet
-6PwXK3inumXmcgdNmPI+kzC88OxHA0PyaptrXR2w+MJVBiH9K27/tliR+MzEQAL6
-qcuVoMeSJ6f5FyuIN8xRmAevqXmtGQDbomaBh+RqmJFrwEpKoll5/0feMv/ev0TK
-oNHdtHeWEI9Aq1ynvmQTjvR+KlshGsOKMdoEmxH6QuXJCSqy/4ccsqDUSPKAgPTp
-N+tBX5EcbT+nDTSUh5O2xcpmSPG5MbPHryRwdkxsGanj2Hw3hyTtm0haL/22cro6
-uwIDAQAB
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxOiivqVda8WAsiM2zhjM
+2Xnwp5egf1t3oSqTL2UslvRgbI3HMzWF9qvzDtfn90uiDEyB9F3+Seqj7/qPU0Jx
+1CSH3533HYK1417Lc4Y8duWhEi/0rH5soESNjQIqkGhGNASHKg+Fm5JhNC//o8mk
+J00nYMnMeX90Pll7rXEfRqqih5E1kvbLL+xblUSOnHs21P0o7viM5exPO0iZhXDb
+ppkTp17aIzs4vbSa9TQji8jWsdHlP28jDPzvtiJwJYFWskt7vbEwwiKdYcIiiYKo
+eMi2FRw7rrv1JmGq5hnoyWH4JzGEuq1OtgBtY6DkQPpq02jSrxPb6uH4x9D3k239
+OwIDAQAB
 -----END PUBLIC KEY-----
 )PEM";
