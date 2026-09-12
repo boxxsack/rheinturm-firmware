@@ -5,6 +5,7 @@
 #include "GitHubRootCerts.h"
 #include "OtaSigningKey.h"
 #include "OtaImageVerifier.h"
+#include "BleAuthFailurePolicy.h"
 
 #include <BLEDevice.h>
 #include <BLEUtils.h>
@@ -184,6 +185,51 @@ private:
     BLEConfigInterface& _owner;
 };
 
+// Observes pairing/encryption outcomes so an ESP32-side stale bond heals itself
+// (see BleAuthFailurePolicy.h). Runs on the Bluetooth task and acts there
+// directly instead of staging for tick(): the bluedroid calls only post messages
+// to the stack, and acting before the peer retries is what makes the next
+// connection pair cleanly.
+//
+// The remaining overrides keep the library's behaviour without callbacks:
+// security requests are accepted, and with ESP_IO_CAP_NONE ("Just Works") no
+// passkey or numeric-comparison event is ever raised.
+class SecurityCallbacks : public BLESecurityCallbacks {
+public:
+    uint32_t onPassKeyRequest() override { return 0; }
+    void onPassKeyNotify(uint32_t) override {}
+    bool onSecurityRequest() override { return true; }
+    bool onConfirmPIN(uint32_t) override { return true; }
+
+    void onAuthenticationComplete(esp_ble_auth_cmpl_t auth) override {
+        char addr[18];
+        snprintf(addr, sizeof(addr), "%02x:%02x:%02x:%02x:%02x:%02x",
+            auth.bd_addr[0], auth.bd_addr[1], auth.bd_addr[2],
+            auth.bd_addr[3], auth.bd_addr[4], auth.bd_addr[5]);
+
+        if (auth.success) {
+            Serial.printf("BLE: Authentication succeeded, peer=%s addr_type=%u auth_mode=0x%02x\n",
+                addr, auth.addr_type, auth.auth_mode);
+            return;
+        }
+
+        Serial.printf("BLE: Authentication FAILED, peer=%s addr_type=%u reason=0x%02x (%s)\n",
+            addr, auth.addr_type, auth.fail_reason,
+            BleAuthFailurePolicy::describeFailReason(auth.fail_reason));
+
+        if (BleAuthFailurePolicy::decide(auth.success, auth.fail_reason)
+                != BleAuthFailurePolicy::Action::RemoveBondAndDisconnect) {
+            Serial.println("BLE: Keeping bond (failure does not indicate a stale bond)");
+            return;
+        }
+
+        esp_err_t removeErr = esp_ble_remove_bond_device(auth.bd_addr);
+        esp_err_t disconnectErr = esp_ble_gap_disconnect(auth.bd_addr);
+        Serial.printf("BLE: Removed stale bond for peer=%s (%s), disconnecting (%s)\n",
+            addr, esp_err_to_name(removeErr), esp_err_to_name(disconnectErr));
+    }
+};
+
 // --- BLEConfigInterface Implementation ---
 
 BLEConfigInterface::BLEConfigInterface(ConnectivityManager& connectivity, TimeDisplay& display)
@@ -214,6 +260,8 @@ void BLEConfigInterface::begin(const char* deviceName, const char* firmwareVersi
     pSecurity->setCapability(ESP_IO_CAP_NONE);
     pSecurity->setInitEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
     pSecurity->setRespEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
+    // Only observes auth outcomes; does not change when encryption is requested.
+    BLEDevice::setSecurityCallbacks(new SecurityCallbacks());
 
     _pServer = BLEDevice::createServer();
     _pServer->setCallbacks(new ServerCallbacks(*this));
