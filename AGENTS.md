@@ -27,7 +27,7 @@ platformio test -e native
 
 ## Architecture
 
-The firmware is split into five modules with a thin orchestrator:
+The firmware is split into six modules with a thin orchestrator:
 
 ### Modules
 
@@ -41,6 +41,8 @@ The firmware is split into five modules with a thin orchestrator:
 
 - **OtaImageVerifier** (`include/OtaImageVerifier.h`, `src/OtaImageVerifier.cpp`) — Pure function, no Arduino/ESP-IDF dependency beyond mbedtls: verifies an RSA-2048 RSASSA-PKCS1-v1.5/SHA-256 signature over a firmware SHA-256 digest against an embedded public key (`include/OtaSigningKey.h`). Host-testable — see `test/test_ota_image_verifier`.
 
+- **BleAuthFailurePolicy** (`include/BleAuthFailurePolicy.h`, `src/BleAuthFailurePolicy.cpp`) — Pure function, no Arduino/ESP-IDF dependency: decides whether a failed `ESP_GAP_BLE_AUTH_CMPL_EVT` should remove the ESP32's bond and disconnect the peer (see the BLE bond self-heal key detail below). Host-testable — see `test/test_ble_auth_failure_policy`.
+
 ### Shared Types
 
 - **ConnectivityState** (`include/ConnectivityState.h`) — Enum shared by ConnectivityManager and BLEConfigInterface: `DISCONNECTED`, `CONNECTING`, `CONNECTED_NO_TIME`, `CONNECTED_WITH_TIME`.
@@ -53,6 +55,7 @@ The firmware is split into five modules with a thin orchestrator:
 
 ```
 BLEConfigInterface → OtaImageVerifier (signature check before flashing)
+BLEConfigInterface → BleAuthFailurePolicy (bond-removal decision on auth failure)
 BLEConfigInterface → ConnectivityManager (credentials, scan, state)
 BLEConfigInterface → TimeDisplay (brightness)
 TimeDisplay → ILedStrip
