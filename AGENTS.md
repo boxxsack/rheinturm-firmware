@@ -82,7 +82,7 @@ ConnectivityManager and TimeDisplay have no knowledge of BLE.
 - Flash budget is tight (~95% of the OTA partition used as of this writing — check `pio run` output). The OTA image-signing addition (OtaImageVerifier + embedded public key + single-fetch hash-while-flash in `_downloadFlashAndHash`) net *reduced* flash usage by ~7.8KB versus pre-#17: it replaced `HTTPUpdate` with direct `Update.h` calls (dropping the now-unused `HTTPUpdate` library), and mbedtls's PK/RSA/hash code was already linked in via `WiFiClientSecure`'s TLS stack, so RSA verification itself added only ~3.3KB gross. Re-measure before adding more code near this ceiling.
 - Dependencies: Adafruit NeoPixel v1.12.3, Update.h (included in ESP32 Arduino framework; OTA no longer uses the higher-level `HTTPUpdate` wrapper — see the OTA image signing bullet above)
 - `#define DEBUG` enables serial debug output
-- `#define FIRMWARE_VERSION "2.7.0"` in main file — published releases on GitHub Releases
+- `FIRMWARE_VERSION` is defined at the top of `src/ESP32_BLE_WIFI_SCAN_FEAT.cpp` (single source of truth) - published releases on GitHub Releases
 - Separator config persisted in NVS via Preferences (namespace: "separator", keys: "mode", "ival") — modes: 0=off, 1=on, 2=blink; intervalSeconds 1–60
 - WiFi reset: app writes `"reset-wifi"` to `wifiReset` characteristic (`4fafff0c-...`); firmware erases NVS credentials, disconnects WiFi, notifies `"reset-ok"` (or `"reset-fail:<msg>"` on error). BLE stays alive.
 
