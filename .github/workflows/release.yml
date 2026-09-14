@@ -30,9 +30,17 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install native test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libmbedtls-dev
+
       - name: Install PlatformIO and signing dependencies
         run: |
-          pip install --upgrade platformio cryptography
+          python -m pip install --upgrade -r requirements-ci.txt cryptography
+
+      - name: Run native tests
+        run: pio test -e native
 
       - name: Build firmware
         run: pio run -e esp32dev
