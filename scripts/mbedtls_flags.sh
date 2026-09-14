@@ -38,5 +38,13 @@ if command -v brew >/dev/null 2>&1; then
     fi
 fi
 
+# Debian/Ubuntu's libmbedtls-dev does not ship pkg-config .pc files on all
+# releases (e.g. Debian bookworm, Ubuntu 22.04); fall back to the default
+# system include/lib search path used by apt packages.
+if [ -f /usr/include/mbedtls/pk.h ]; then
+    echo "-lmbedtls -lmbedx509 -lmbedcrypto"
+    exit 0
+fi
+
 echo "$error_message" >&2
 exit 1
