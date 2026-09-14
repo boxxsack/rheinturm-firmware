@@ -11,19 +11,24 @@ The companion Flutter app ([boxxsack/rheinturm-app](https://github.com/boxxsack/
 ## Build Commands
 
 ```bash
-platformio run                    # Build firmware
-platformio run --target upload    # Build and flash to device
-platformio device monitor         # Serial monitor (115200 baud)
+pio run                    # Build firmware (esp32dev is the default environment)
+pio run --target upload    # Build and flash to device
+pio device monitor         # Serial monitor (115200 baud)
 ```
 
 No test infrastructure exists for the ESP32 target itself. There is one host-side (`native`)
 PlatformIO test env for the pure-logic modules (`OtaImageVerifier`, `BleAuthFailurePolicy`); its
-`build_src_filter` excludes the Arduino-dependent sources, so new pure modules are picked up automatically:
+pre-build configuration explicitly selects the source needed by each suite, so hardware-dependent
+sources cannot silently enter the native build:
 
 ```bash
-brew install mbedtls               # or: apt install libmbedtls-dev (Linux)
-platformio test -e native
+brew install mbedtls              # macOS
+sudo apt install libmbedtls-dev   # Debian or Ubuntu
+pio test -e native
 ```
+
+Pull requests and pushes to `main` run native tests and an `esp32dev` build in
+`.github/workflows/ci.yml`. Tag releases run the native tests before signing or publishing.
 
 ## Architecture
 
