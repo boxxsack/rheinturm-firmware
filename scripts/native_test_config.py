@@ -7,18 +7,19 @@ Import("env")  # type: ignore[name-defined]  # Provided by PlatformIO/SCons.
 
 
 TEST_SOURCES = {
-    "test_ble_auth_failure_policy": "BleAuthFailurePolicy.cpp",
-    "test_ota_image_verifier": "OtaImageVerifier.cpp",
+    "test_ble_auth_failure_policy": ["BleAuthFailurePolicy.cpp"],
+    "test_ota_image_verifier": ["OtaImageVerifier.cpp"],
+    "test_ota_updater": ["OtaUpdater.cpp"],
 }
 
 test_name = env.get("PIOTEST_RUNNING_NAME")
-source = TEST_SOURCES.get(test_name)
-if source is None:
+sources = TEST_SOURCES.get(test_name)
+if sources is None:
     known_tests = ", ".join(sorted(TEST_SOURCES))
     print(f"error: native test source is not configured for {test_name!r}; expected one of: {known_tests}")
     env.Exit(1)
 
-env.Replace(SRC_FILTER=["-<*>", f"+<{source}>"])
+env.Replace(SRC_FILTER=["-<*>", *[f"+<{source}>" for source in sources]])
 
 if test_name == "test_ota_image_verifier":
     project_dir = Path(env.subst("$PROJECT_DIR"))

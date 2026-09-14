@@ -5,6 +5,7 @@
 #include "GitHubRootCerts.h"
 #include "OtaSigningKey.h"
 #include "OtaImageVerifier.h"
+#include "OtaUpdater.h"
 #include "BleAuthFailurePolicy.h"
 
 #include <BLEDevice.h>
@@ -227,6 +228,238 @@ public:
         esp_err_t disconnectErr = esp_ble_gap_disconnect(auth.bd_addr);
         Serial.printf("BLE: Removed stale bond for peer=%s (%s), disconnecting (%s)\n",
             addr, esp_err_to_name(removeErr), esp_err_to_name(disconnectErr));
+    }
+};
+
+// --- OTA production adapters ---
+
+class ArduinoOtaHttpTransport : public IOtaHttpTransport {
+public:
+    bool resolveRedirect(const std::string& url, std::string& resolvedUrl) override {
+        WiFiClientSecure client;
+        client.setCACert(GITHUB_OTA_ROOT_CA_BUNDLE);
+
+        HTTPClient http;
+        http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
+        if (!http.begin(client, String(url.c_str()))) {
+            Serial.println("OTA: Could not open URL for redirect resolution: " + String(url.c_str()));
+            return false;
+        }
+
+        int code = http.GET();
+        bool success = false;
+        if (code == HTTP_CODE_OK) {
+            resolvedUrl = url;
+            success = true;
+        } else if (code == 301 || code == 302 || code == 307 || code == 308) {
+            String location = http.getLocation();
+            if (location.length() > 0) {
+                resolvedUrl = std::string(location.c_str());
+                Serial.println("OTA: Resolved URL: " + location);
+                success = true;
+            }
+        }
+        if (!success) {
+            Serial.printf("OTA: URL resolution failed, HTTP %d\n", code);
+        }
+        http.end();
+        return success;
+    }
+
+    bool fetchSignature(const std::string& url, uint8_t* signatureOut, size_t signatureLen) override {
+        WiFiClientSecure client;
+        client.setCACert(GITHUB_OTA_ROOT_CA_BUNDLE);
+
+        HTTPClient http;
+        http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
+        if (!http.begin(client, String(url.c_str()))) {
+            Serial.println("OTA: Could not open signature URL: " + String(url.c_str()));
+            return false;
+        }
+
+        int code = http.GET();
+        if (code != HTTP_CODE_OK) {
+            Serial.printf("OTA: Signature fetch failed, HTTP %d\n", code);
+            http.end();
+            return false;
+        }
+
+        int len = http.getSize();
+        if (len != static_cast<int>(signatureLen)) {
+            Serial.printf("OTA: Signature size mismatch: expected %u, got %d\n",
+                static_cast<unsigned>(signatureLen), len);
+            http.end();
+            return false;
+        }
+
+        WiFiClient* stream = http.getStreamPtr();
+        size_t received = 0;
+        size_t stallCount = 0;
+        while (received < signatureLen && stallCount < OtaUpdater::kDefaultMaxStalls) {
+            size_t available = stream->available();
+            if (available == 0) {
+                ++stallCount;
+                delay(100);
+                continue;
+            }
+            stallCount = 0;
+            size_t toRead = std::min(available, signatureLen - received);
+            int read = stream->readBytes(signatureOut + received, toRead);
+            if (read <= 0) break;
+            received += static_cast<size_t>(read);
+        }
+        http.end();
+
+        if (received != signatureLen) {
+            Serial.println("OTA: Signature download incomplete");
+            return false;
+        }
+        return true;
+    }
+
+    bool beginImage(const std::string& url, int64_t& contentLength) override {
+        contentLength = 0;
+        _imageClient.setCACert(GITHUB_OTA_ROOT_CA_BUNDLE);
+        _imageHttp.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
+        if (!_imageHttp.begin(_imageClient, String(url.c_str()))) {
+            Serial.println("OTA: Could not open firmware URL: " + String(url.c_str()));
+            return false;
+        }
+
+        _imageOpen = true;
+        int code = _imageHttp.GET();
+        if (code != HTTP_CODE_OK) {
+            Serial.printf("OTA: Firmware fetch failed, HTTP %d\n", code);
+            endImage();
+            return false;
+        }
+
+        int len = _imageHttp.getSize();
+        if (len <= 0) {
+            Serial.println("OTA: Firmware content length unknown, aborting");
+            return true;
+        }
+        contentLength = static_cast<int64_t>(len);
+        return true;
+    }
+
+    int readImage(uint8_t* buffer, size_t maxLen) override {
+        if (!_imageOpen) return -1;
+        WiFiClient* stream = _imageHttp.getStreamPtr();
+        size_t available = stream->available();
+        if (available == 0) {
+            delay(100);
+            return 0;
+        }
+        return stream->readBytes(buffer, std::min(available, maxLen));
+    }
+
+    void endImage() override {
+        if (_imageOpen) {
+            _imageHttp.end();
+            _imageOpen = false;
+        }
+    }
+
+private:
+    WiFiClientSecure _imageClient;
+    HTTPClient _imageHttp;
+    bool _imageOpen = false;
+};
+
+class ArduinoOtaUpdateSink : public IOtaUpdateSink {
+public:
+    bool begin(size_t contentLength) override {
+        return Update.begin(contentLength);
+    }
+
+    size_t write(uint8_t* data, size_t length) override {
+        return Update.write(data, length);
+    }
+
+    bool end() override {
+        return Update.end();
+    }
+
+    void abort() override {
+        Update.abort();
+    }
+
+    const char* errorString() const override {
+        return Update.errorString();
+    }
+};
+
+class MbedTlsOtaSha256 : public IOtaSha256 {
+public:
+    ~MbedTlsOtaSha256() override {
+        _free();
+    }
+
+    bool begin() override {
+        _free();
+        mbedtls_md_init(&_context);
+        _initialized = true;
+        if (mbedtls_md_setup(&_context, mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), 0) != 0 ||
+            mbedtls_md_starts(&_context) != 0) {
+            _free();
+            return false;
+        }
+        _active = true;
+        return true;
+    }
+
+    bool update(const uint8_t* data, size_t length) override {
+        return _active && mbedtls_md_update(&_context, data, length) == 0;
+    }
+
+    bool finish(uint8_t* digestOut, size_t digestLen) override {
+        if (!_active || digestLen != OtaImageVerifier::kSha256DigestSize) {
+            return false;
+        }
+        int result = mbedtls_md_finish(&_context, digestOut);
+        _free();
+        return result == 0;
+    }
+
+private:
+    mbedtls_md_context_t _context;
+    bool _initialized = false;
+    bool _active = false;
+
+    void _free() {
+        if (_initialized) {
+            mbedtls_md_free(&_context);
+            _initialized = false;
+            _active = false;
+        }
+    }
+};
+
+class ArduinoOtaSignatureVerifier : public IOtaSignatureVerifier {
+public:
+    bool verify(const uint8_t* digest, const uint8_t* signature, size_t signatureLen) override {
+        return OtaImageVerifier::verify(digest, signature, signatureLen, OTA_SIGNING_PUBLIC_KEY);
+    }
+};
+
+class DisplayOtaProgressReporter : public IOtaProgressReporter {
+public:
+    explicit DisplayOtaProgressReporter(TimeDisplay& display) : _display(display) {}
+
+    void showProgress(uint8_t percent) override {
+        _display.showOtaProgress(percent);
+    }
+
+private:
+    TimeDisplay& _display;
+};
+
+class EspRestart : public IOtaRestart {
+public:
+    void restart() override {
+        delay(1000);
+        ESP.restart();
     }
 };
 
@@ -547,224 +780,24 @@ void BLEConfigInterface::_performOta(const String& url) {
 
     Serial.printf("OTA: Free heap after BLE deinit: %u bytes\n", ESP.getFreeHeap());
 
-    // Show initial progress on LEDs
-    _display.showOtaProgress(0);
-
-    // Resolve any redirect (e.g. github.com → objects.githubusercontent.com) before
-    // the actual update, with a short-lived HTTPClient — redirect following is
-    // disabled everywhere else in this flow so every request targets the same
-    // resolved host.
-    String resolvedUrl = _resolveRedirect(url);
-
-    // --- Image download + signature verification (issue #17) ---
-    // Fetch the signature first (small, separate object — it is trust
-    // material, not the image being flashed, so a separate request for it
-    // carries no TOCTOU risk).
     Serial.println("OTA: Fetching signature...");
-    uint8_t signature[OtaImageVerifier::kRsa2048SignatureSize];
-    String resolvedSigUrl = _resolveRedirect(url + ".sig");
-    if (!_fetchOtaSignature(resolvedSigUrl, signature, sizeof(signature))) {
-        Serial.println("OTA: Failed to fetch signature, refusing to flash. Restarting...");
-        delay(1000);
-        ESP.restart();
-        return;
-    }
-
-    // Download the firmware image ONCE, writing it to the inactive OTA
-    // partition and SHA-256-hashing it in the same pass (_downloadFlashAndHash
-    // feeds every chunk to both Update.write() and the hasher). This is
-    // deliberate: hashing from a separate download (as an earlier version of
-    // this change did) would let the verified bytes and the flashed bytes
-    // diverge between the two independent HTTP requests. Verification then
-    // gates Update.end() (which marks the partition bootable) — an unsigned
-    // or mismatched image is aborted and never activated.
     Serial.println("OTA: Downloading and writing firmware (verifying signature before activation)...");
-    uint8_t digest[OtaImageVerifier::kSha256DigestSize];
-    if (!_downloadFlashAndHash(resolvedUrl, digest)) {
-        Serial.println("OTA: Download/flash failed, restarting...");
-        delay(1000);
-        ESP.restart();
-        return;
+
+    ArduinoOtaHttpTransport http;
+    ArduinoOtaUpdateSink update;
+    MbedTlsOtaSha256 sha256;
+    ArduinoOtaSignatureVerifier verifier;
+    DisplayOtaProgressReporter progress(_display);
+    EspRestart restart;
+    OtaUpdater updater(http, update, sha256, verifier, progress, restart);
+
+    OtaUpdater::Result result = updater.perform(std::string(url.c_str()));
+    if (result != OtaUpdater::Result::Success) {
+        Serial.printf("OTA: Transaction failed (%u)%s\n",
+            static_cast<unsigned>(result), updater.updateError());
+    } else {
+        Serial.println("OTA: Signature verified, update successful, restarting...");
     }
-
-    if (!OtaImageVerifier::verify(digest, signature, sizeof(signature), OTA_SIGNING_PUBLIC_KEY)) {
-        Serial.println("OTA: Signature verification FAILED — aborting, image will not boot. Restarting...");
-        Update.abort();
-        delay(1000);
-        ESP.restart();
-        return;
-    }
-
-    if (!Update.end()) {
-        Serial.printf("OTA: Update.end failed: %s\n", Update.errorString());
-        delay(1000);
-        ESP.restart();
-        return;
-    }
-
-    Serial.println("OTA: Signature verified, update successful, restarting...");
-    delay(1000);
-    ESP.restart();
-    // --- end image download + signature verification ---
-}
-
-String BLEConfigInterface::_resolveRedirect(const String& url) {
-    String resolvedUrl = url;
-    WiFiClientSecure resolveClient;
-    // Verify the GitHub TLS chain against pinned roots — a network MITM must
-    // not be able to redirect the device to an attacker-controlled host.
-    resolveClient.setCACert(GITHUB_OTA_ROOT_CA_BUNDLE);
-    HTTPClient resolveHttp;
-    resolveHttp.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
-    if (resolveHttp.begin(resolveClient, url)) {
-        int code = resolveHttp.GET();
-        if (code == 301 || code == 302 || code == 307 || code == 308) {
-            String location = resolveHttp.getLocation();
-            if (location.length() > 0) {
-                resolvedUrl = location;
-                Serial.println("OTA: Resolved URL: " + resolvedUrl);
-            }
-        }
-        resolveHttp.end();
-    }
-    return resolvedUrl;
-}
-
-bool BLEConfigInterface::_fetchOtaSignature(const String& signatureUrl, uint8_t* signatureOut, size_t signatureLen) {
-    WiFiClientSecure client;
-    client.setCACert(GITHUB_OTA_ROOT_CA_BUNDLE);
-
-    HTTPClient http;
-    http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
-    if (!http.begin(client, signatureUrl)) {
-        Serial.println("OTA: Could not open signature URL: " + signatureUrl);
-        return false;
-    }
-
-    int code = http.GET();
-    if (code != HTTP_CODE_OK) {
-        Serial.printf("OTA: Signature fetch failed, HTTP %d\n", code);
-        http.end();
-        return false;
-    }
-
-    int len = http.getSize();
-    if (len != static_cast<int>(signatureLen)) {
-        Serial.printf("OTA: Signature size mismatch: expected %u, got %d\n", (unsigned)signatureLen, len);
-        http.end();
-        return false;
-    }
-
-    WiFiClient* stream = http.getStreamPtr();
-    size_t received = 0;
-    int stallCount = 0;
-    while (received < signatureLen && stallCount < 300) {
-        size_t avail = stream->available();
-        if (avail == 0) {
-            stallCount++;
-            delay(100);
-            continue;
-        }
-        stallCount = 0;
-        int read = stream->readBytes(signatureOut + received, std::min(avail, signatureLen - received));
-        if (read <= 0) break;
-        received += read;
-    }
-    http.end();
-
-    if (received != signatureLen) {
-        Serial.println("OTA: Signature download incomplete");
-        return false;
-    }
-    return true;
-}
-
-bool BLEConfigInterface::_downloadFlashAndHash(const String& url, uint8_t digestOut[32]) {
-    WiFiClientSecure client;
-    client.setCACert(GITHUB_OTA_ROOT_CA_BUNDLE);
-
-    HTTPClient http;
-    http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
-    if (!http.begin(client, url)) {
-        Serial.println("OTA: Could not open firmware URL: " + url);
-        return false;
-    }
-
-    int code = http.GET();
-    if (code != HTTP_CODE_OK) {
-        Serial.printf("OTA: Firmware fetch failed, HTTP %d\n", code);
-        http.end();
-        return false;
-    }
-
-    int len = http.getSize();
-    if (len <= 0) {
-        Serial.println("OTA: Firmware content length unknown, aborting");
-        http.end();
-        return false;
-    }
-
-    if (!Update.begin(static_cast<size_t>(len))) {
-        Serial.printf("OTA: Update.begin failed: %s\n", Update.errorString());
-        http.end();
-        return false;
-    }
-
-    mbedtls_md_context_t ctx;
-    mbedtls_md_init(&ctx);
-    mbedtls_md_setup(&ctx, mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), 0);
-    mbedtls_md_starts(&ctx);
-
-    WiFiClient* stream = http.getStreamPtr();
-    uint8_t buf[512];
-    size_t remaining = static_cast<size_t>(len);
-    int stallCount = 0;
-    int lastPercent = -1;
-    bool writeFailed = false;
-    while (remaining > 0 && stallCount < 300) {
-        size_t avail = stream->available();
-        if (avail == 0) {
-            stallCount++;
-            delay(100);
-            continue;
-        }
-        stallCount = 0;
-        size_t toRead = std::min({avail, remaining, sizeof(buf)});
-        int read = stream->readBytes(buf, toRead);
-        if (read <= 0) break;
-
-        // Write and hash the SAME bytes from the SAME read — the digest
-        // verified below is guaranteed to describe exactly what was written.
-        if (Update.write(buf, read) != static_cast<size_t>(read)) {
-            Serial.printf("OTA: Update.write failed: %s\n", Update.errorString());
-            writeFailed = true;
-            break;
-        }
-        mbedtls_md_update(&ctx, buf, read);
-        remaining -= read;
-
-        int percent = static_cast<int>(((len - static_cast<int>(remaining)) * 100) / len);
-        if (percent != lastPercent) {
-            lastPercent = percent;
-            Serial.printf("OTA: Progress %d%%\n", percent);
-            _display.showOtaProgress(percent);
-        }
-    }
-    http.end();
-
-    mbedtls_md_finish(&ctx, digestOut);
-    mbedtls_md_free(&ctx);
-
-    if (writeFailed) {
-        Update.abort();
-        return false;
-    }
-    if (remaining != 0) {
-        Serial.println("OTA: Firmware download incomplete");
-        Update.abort();
-        return false;
-    }
-    return true;
 }
 
 void BLEConfigInterface::_advanceScanStateMachine() {
