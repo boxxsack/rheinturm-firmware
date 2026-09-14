@@ -16,6 +16,14 @@ pio run --target upload    # Build and flash to device
 pio device monitor         # Serial monitor (115200 baud)
 ```
 
+The OTA app slots are sized by `partitions_ota.csv`. After an `esp32dev` build,
+check the published image with `python3 scripts/check_flash_budget.py`.
+The check measures `.pio/build/esp32dev/firmware.bin`, the artifact that must
+fit the OTA slot, and derives the capacity from the `ota_0` app row. It warns
+at 95% and fails at 98%; override either threshold with
+`FLASH_BUDGET_WARNING_PERCENT` or `FLASH_BUDGET_FAIL_PERCENT` (or the matching
+script arguments). CI and release run this check before release signing.
+
 No test infrastructure exists for the ESP32 target itself. There is one host-side (`native`)
 PlatformIO test env for the pure-logic modules (`OtaImageVerifier`, `BleAuthFailurePolicy`); its
 pre-build configuration explicitly selects the source needed by each suite, so hardware-dependent

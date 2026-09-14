@@ -45,6 +45,9 @@ jobs:
       - name: Build firmware
         run: pio run -e esp32dev
 
+      - name: Check OTA flash budget
+        run: python3 scripts/check_flash_budget.py >> "$GITHUB_STEP_SUMMARY"
+
       - name: Sign firmware.bin
         env:
           OTA_SIGNING_PRIVATE_KEY: ${{ secrets.OTA_SIGNING_PRIVATE_KEY }}
