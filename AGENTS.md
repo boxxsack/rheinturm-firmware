@@ -26,7 +26,7 @@ script arguments). CI and release run this check before release signing.
 
 No test infrastructure exists for the ESP32 target itself. There is one host-side (`native`)
 PlatformIO test env for the pure-logic modules (`OtaImageVerifier`, `BleAuthFailurePolicy`,
-`OtaUpdater`); its
+`OtaUpdater`) and for `TimeDisplayLogic`/`TimeDisplay` (`test/test_time_display`); its
 pre-build configuration explicitly selects the source needed by each suite, so hardware-dependent
 sources cannot silently enter the native build:
 
