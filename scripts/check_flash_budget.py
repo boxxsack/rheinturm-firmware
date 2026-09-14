@@ -28,6 +28,8 @@ def main() -> int:
     parser.add_argument("--fail-percent", type=float,
                         default=float(os.getenv("FLASH_BUDGET_FAIL_PERCENT", "98")))
     args = parser.parse_args()
+    if args.warning_percent >= args.fail_percent:
+        parser.error("warning threshold must be lower than fail threshold")
     binary = Path(args.binary)
     capacity = partition_capacity(Path(args.partitions))
     used = binary.stat().st_size
