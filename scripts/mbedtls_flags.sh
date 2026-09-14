@@ -21,11 +21,14 @@ has_mbedtls_files() {
     done
 }
 
-if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists mbedtls; then
+if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists mbedtls mbedx509 mbedcrypto; then
     include_dir="$(pkg-config --variable=includedir mbedtls)"
     lib_dir="$(pkg-config --variable=libdir mbedtls)"
     if has_mbedtls_files "$include_dir" "$lib_dir"; then
-        pkg-config --cflags --libs mbedtls
+        # mbedtls.pc only lists "-lmbedtls" in its public Libs field; mbedcrypto
+        # and mbedx509 (needed for the mbedtls_pk_* symbols we call) are only in
+        # Requires.private, so all three modules must be queried explicitly.
+        pkg-config --cflags --libs mbedtls mbedx509 mbedcrypto
         exit 0
     fi
 fi
