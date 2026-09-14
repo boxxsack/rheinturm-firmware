@@ -26,7 +26,7 @@ script arguments). CI and release run this check before release signing.
 
 No test infrastructure exists for the ESP32 target itself. There is one host-side (`native`)
 PlatformIO test env for the pure-logic modules (`OtaImageVerifier`, `BleAuthFailurePolicy`,
-`OtaUpdater`); its
+`OtaUpdater`) and for `TimeDisplayLogic`/`TimeDisplay` (`test/test_time_display`); its
 pre-build configuration explicitly selects the source needed by each suite, so hardware-dependent
 sources cannot silently enter the native build:
 
@@ -45,13 +45,13 @@ The firmware is split into seven modules with a thin orchestrator:
 
 ### Modules
 
-- **TimeDisplay** (`include/TimeDisplay.h`, `src/TimeDisplay.cpp`) — Owns BCD time-to-LED conversion, separator blink logic, non-blocking rainbow animation, and OTA progress display. Depends on `ILedStrip` interface for hardware abstraction. 5 public methods: `update()`, `setBrightness()`, `playRainbow()`, `cancelRainbow()`, `showOtaProgress()`.
+- **TimeDisplayLogic / TimeDisplay** (`include/TimeDisplayLogic.h`, `src/TimeDisplayLogic.cpp`, `include/TimeDisplay.h`, `src/TimeDisplay.cpp`) — `TimeDisplayLogic` is the Arduino-free, host-tested decision layer for BCD frames, schedule windows and payload validation, separator phases, brightness decisions, blanking, and OTA progress frames. `TimeDisplay` is the thin LED-facing adapter; it receives `IMonotonicClock` and `IDisplaySettingsStore` implementations so timing and NVS stay outside the logic. ESP32 implementations are in `TimeDisplayPlatform.cpp`, preserving the `schedule` and `separator` namespaces and existing keys. Rainbow animation remains on `TimeDisplay`. Public methods remain `update()`, `setBrightness()`, `playRainbow()`, `cancelRainbow()`, and `showOtaProgress()`, plus the existing configuration accessors.
 
 - **ConnectivityManager** (`include/ConnectivityManager.h`, `src/ConnectivityManager.cpp`) — Owns WiFi connection lifecycle (non-blocking reconnect with 30s cooldown), NTP time sync (background SNTP polling), credential persistence (NVS), and async WiFi scanning. 8 public methods: `begin()`, `tick()`, `applyCredentials()`, `clearCredentials()`, `getState()`, `hasValidTime()`, `startAsyncScan()`, `checkScanResults()`.
 
 - **BLEConfigInterface** (`include/BLEConfigInterface.h`, `src/BLEConfigInterface.cpp`) — Owns the entire BLE stack: server, service, 12 characteristics (confState, SSID, password, scanState, scanList, brightness, firmwareVersion, otaControl, rainbow, schedule, separatorConfig, wifiReset), callback dispatch. BLE callbacks stage values in private fields; `tick()` dispatches to ConnectivityManager and TimeDisplay (cross-task safe). Non-blocking scan state machine with chunked 20-byte notifications. For OTA, it tears down BLE to free ~60-80KB heap for TLS, then drives `OtaUpdater` through real WiFi, flash, mbedTLS, display, and restart adapters. 3 public methods: `begin()`, `tick()`, `isClientConnected()`.
 
-- **ILedStrip / NeoPixelAdapter** (`include/ILedStrip.h`, `include/NeoPixelAdapter.h`, `src/NeoPixelAdapter.cpp`) — Abstract 3-method LED strip interface (`setPixelColor`, `show`, `setBrightness`) with Adafruit NeoPixel adapter. Enables testing without hardware.
+- **ILedStrip / NeoPixelAdapter** (`include/ILedStrip.h`, `include/NeoPixelAdapter.h`, `src/NeoPixelAdapter.cpp`) — Abstract LED strip interface (`setPixelColor`, `show`, `setBrightness`, `clear`) with Adafruit NeoPixel adapter. Enables testing without hardware.
 
 - **OtaImageVerifier** (`include/OtaImageVerifier.h`, `src/OtaImageVerifier.cpp`) — Pure function, no Arduino/ESP-IDF dependency beyond mbedtls: verifies an RSA-2048 RSASSA-PKCS1-v1.5/SHA-256 signature over a firmware SHA-256 digest against an embedded public key (`include/OtaSigningKey.h`). Host-testable — see `test/test_ota_image_verifier`.
 
@@ -76,7 +76,10 @@ OtaUpdater → injected HTTP/update/hash/verifier/progress/restart interfaces
 BLEConfigInterface → BleAuthFailurePolicy (bond-removal decision on auth failure)
 BLEConfigInterface → ConnectivityManager (credentials, scan, state)
 BLEConfigInterface → TimeDisplay (brightness)
+TimeDisplay → TimeDisplayLogic
 TimeDisplay → ILedStrip
+TimeDisplay → IMonotonicClock / IDisplaySettingsStore
+TimeDisplayPlatform → Arduino / Preferences
 ConnectivityManager and TimeDisplay have no knowledge of BLE.
 ```
 

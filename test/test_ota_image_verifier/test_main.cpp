@@ -135,7 +135,13 @@ void test_embedded_public_key_is_rsa_2048(void) {
         return;
     }
 
+#if MBEDTLS_VERSION_MAJOR >= 4
+    TEST_ASSERT_TRUE(mbedtls_pk_can_do_psa(&pk,
+                                           PSA_ALG_RSA_PKCS1V15_SIGN(PSA_ALG_SHA_256),
+                                           PSA_KEY_USAGE_VERIFY_HASH));
+#else
     TEST_ASSERT_TRUE(mbedtls_pk_can_do(&pk, MBEDTLS_PK_RSA));
+#endif
     TEST_ASSERT_EQUAL_UINT(2048, mbedtls_pk_get_bitlen(&pk));
     mbedtls_pk_free(&pk);
 }

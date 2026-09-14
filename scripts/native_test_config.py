@@ -10,6 +10,7 @@ TEST_SOURCES = {
     "test_ble_auth_failure_policy": ["BleAuthFailurePolicy.cpp"],
     "test_ota_image_verifier": ["OtaImageVerifier.cpp"],
     "test_ota_updater": ["OtaUpdater.cpp"],
+    "test_time_display": ["TimeDisplay.cpp", "TimeDisplayLogic.cpp"],
 }
 
 test_name = env.get("PIOTEST_RUNNING_NAME")

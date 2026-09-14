@@ -5,6 +5,7 @@
 
 #include "NeoPixelAdapter.h"
 #include "TimeDisplay.h"
+#include "TimeDisplayPlatform.h"
 #include "ConnectivityManager.h"
 #include "BLEConfigInterface.h"
 
@@ -15,7 +16,9 @@
 
 Adafruit_NeoPixel strip(LED_COUNT, LED_PIN, NEO_GRB + NEO_KHZ800);
 NeoPixelAdapter stripAdapter(strip);
-TimeDisplay display(stripAdapter);
+ArduinoMonotonicClock monotonicClock;
+PreferencesDisplaySettings displaySettings;
+TimeDisplay display(stripAdapter, monotonicClock, displaySettings);
 ConnectivityManager connectivity;
 BLEConfigInterface ble(connectivity, display);
 
