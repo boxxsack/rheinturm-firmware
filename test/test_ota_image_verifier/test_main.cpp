@@ -15,7 +15,13 @@
 // different (attacker) keypair.
 #include <unity.h>
 
+#include "OtaSigningKey.h"
 #include <cstring>
+#include "mbedtls/pk.h"
+#include "mbedtls/version.h"
+#if MBEDTLS_VERSION_MAJOR >= 4
+#include "psa/crypto.h"
+#endif
 
 #include "OtaImageVerifier.h"
 
@@ -112,6 +118,28 @@ void test_malformed_public_key_is_rejected(void) {
     TEST_ASSERT_FALSE_MESSAGE(ok, "a malformed embedded public key must fail closed, not crash");
 }
 
+void test_embedded_public_key_is_rsa_2048(void) {
+#if MBEDTLS_VERSION_MAJOR >= 4
+    TEST_ASSERT_EQUAL_INT(PSA_SUCCESS, psa_crypto_init());
+#endif
+
+    mbedtls_pk_context pk;
+    mbedtls_pk_init(&pk);
+    int result = mbedtls_pk_parse_public_key(
+        &pk,
+        reinterpret_cast<const unsigned char*>(OTA_SIGNING_PUBLIC_KEY),
+        std::strlen(OTA_SIGNING_PUBLIC_KEY) + 1);
+    if (result != 0) {
+        mbedtls_pk_free(&pk);
+        TEST_FAIL_MESSAGE("the embedded OTA public key must parse");
+        return;
+    }
+
+    TEST_ASSERT_TRUE(mbedtls_pk_can_do(&pk, MBEDTLS_PK_RSA));
+    TEST_ASSERT_EQUAL_UINT(2048, mbedtls_pk_get_bitlen(&pk));
+    mbedtls_pk_free(&pk);
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_valid_signature_is_accepted);
@@ -120,5 +148,6 @@ int main(int argc, char **argv) {
     RUN_TEST(test_unsigned_garbage_signature_is_rejected);
     RUN_TEST(test_wrong_length_signature_is_rejected);
     RUN_TEST(test_malformed_public_key_is_rejected);
+    RUN_TEST(test_embedded_public_key_is_rsa_2048);
     return UNITY_END();
 }

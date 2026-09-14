@@ -25,7 +25,8 @@ at 96% and fails at 98%; override either threshold with
 script arguments). CI and release run this check before release signing.
 
 No test infrastructure exists for the ESP32 target itself. There is one host-side (`native`)
-PlatformIO test env for the pure-logic modules (`OtaImageVerifier`, `BleAuthFailurePolicy`); its
+PlatformIO test env for the pure-logic modules (`OtaImageVerifier`, `BleAuthFailurePolicy`,
+`OtaUpdater`); its
 pre-build configuration explicitly selects the source needed by each suite, so hardware-dependent
 sources cannot silently enter the native build:
 
@@ -40,7 +41,7 @@ Pull requests and pushes to `main` run native tests and an `esp32dev` build in
 
 ## Architecture
 
-The firmware is split into six modules with a thin orchestrator:
+The firmware is split into seven modules with a thin orchestrator:
 
 ### Modules
 
@@ -48,11 +49,13 @@ The firmware is split into six modules with a thin orchestrator:
 
 - **ConnectivityManager** (`include/ConnectivityManager.h`, `src/ConnectivityManager.cpp`) — Owns WiFi connection lifecycle (non-blocking reconnect with 30s cooldown), NTP time sync (background SNTP polling), credential persistence (NVS), and async WiFi scanning. 8 public methods: `begin()`, `tick()`, `applyCredentials()`, `clearCredentials()`, `getState()`, `hasValidTime()`, `startAsyncScan()`, `checkScanResults()`.
 
-- **BLEConfigInterface** (`include/BLEConfigInterface.h`, `src/BLEConfigInterface.cpp`) — Owns the entire BLE stack: server, service, 12 characteristics (confState, SSID, password, scanState, scanList, brightness, firmwareVersion, otaControl, rainbow, schedule, separatorConfig, wifiReset), callback dispatch. BLE callbacks stage values in private fields; `tick()` dispatches to ConnectivityManager and TimeDisplay (cross-task safe). Non-blocking scan state machine with chunked 20-byte notifications. OTA update support: receives download URL over BLE, deinits BLE to free ~60-80KB heap for TLS, resolves the download URL and its signature (`_resolveRedirect`), fetches the signature (`_fetchOtaSignature`), streams the firmware image in one pass writing it to flash and hashing it simultaneously (`_downloadFlashAndHash`, using `Update.h` directly rather than the higher-level `HTTPUpdate`), then only activates the image (`Update.end()`) if `OtaImageVerifier::verify()` passes — otherwise `Update.abort()`. Shows progress on LEDs, then restarts. 3 public methods: `begin()`, `tick()`, `isClientConnected()`.
+- **BLEConfigInterface** (`include/BLEConfigInterface.h`, `src/BLEConfigInterface.cpp`) — Owns the entire BLE stack: server, service, 12 characteristics (confState, SSID, password, scanState, scanList, brightness, firmwareVersion, otaControl, rainbow, schedule, separatorConfig, wifiReset), callback dispatch. BLE callbacks stage values in private fields; `tick()` dispatches to ConnectivityManager and TimeDisplay (cross-task safe). Non-blocking scan state machine with chunked 20-byte notifications. For OTA, it tears down BLE to free ~60-80KB heap for TLS, then drives `OtaUpdater` through real WiFi, flash, mbedTLS, display, and restart adapters. 3 public methods: `begin()`, `tick()`, `isClientConnected()`.
 
 - **ILedStrip / NeoPixelAdapter** (`include/ILedStrip.h`, `include/NeoPixelAdapter.h`, `src/NeoPixelAdapter.cpp`) — Abstract 3-method LED strip interface (`setPixelColor`, `show`, `setBrightness`) with Adafruit NeoPixel adapter. Enables testing without hardware.
 
 - **OtaImageVerifier** (`include/OtaImageVerifier.h`, `src/OtaImageVerifier.cpp`) — Pure function, no Arduino/ESP-IDF dependency beyond mbedtls: verifies an RSA-2048 RSASSA-PKCS1-v1.5/SHA-256 signature over a firmware SHA-256 digest against an embedded public key (`include/OtaSigningKey.h`). Host-testable — see `test/test_ota_image_verifier`.
+
+- **OtaUpdater** (`include/OtaUpdater.h`, `src/OtaUpdater.cpp`) — Host-testable fail-closed OTA transaction. Injects HTTP transport, update sink, SHA-256 hashing, signature verification, progress, and restart; resolves both URLs, fetches the fixed-size signature, writes and hashes the image in one pass, and calls `end()` only after verification. Host coverage for every terminal branch is in `test/test_ota_updater`.
 
 - **BleAuthFailurePolicy** (`include/BleAuthFailurePolicy.h`, `src/BleAuthFailurePolicy.cpp`) — Pure function, no Arduino/ESP-IDF dependency: decides whether a failed `ESP_GAP_BLE_AUTH_CMPL_EVT` should remove the ESP32's bond and disconnect the peer (see the BLE bond self-heal key detail below). Host-testable — see `test/test_ble_auth_failure_policy`.
 
@@ -67,7 +70,9 @@ The firmware is split into six modules with a thin orchestrator:
 ### Dependency Graph
 
 ```
-BLEConfigInterface → OtaImageVerifier (signature check before flashing)
+BLEConfigInterface → OtaUpdater (real transport, flash, hash, verifier, display, and restart adapters)
+BLEConfigInterface → OtaImageVerifier (production verifier adapter)
+OtaUpdater → injected HTTP/update/hash/verifier/progress/restart interfaces
 BLEConfigInterface → BleAuthFailurePolicy (bond-removal decision on auth failure)
 BLEConfigInterface → ConnectivityManager (credentials, scan, state)
 BLEConfigInterface → TimeDisplay (brightness)
@@ -87,7 +92,7 @@ ConnectivityManager and TimeDisplay have no knowledge of BLE.
 - BLE bond self-heal: `SecurityCallbacks` in `src/BLEConfigInterface.cpp` logs every `ESP_GAP_BLE_AUTH_CMPL_EVT` (peer address + fail reason) and, per `BleAuthFailurePolicy`, removes the ESP32's bond and disconnects on auth failure so the next connect re-pairs. Bluedroid (IDF 4.4) already clears NVS keys on most SMP failures itself; this is an explicit, stack-version-independent layer plus diagnostics. It cannot heal an iOS-side stale key (ESP32 has no bond) - the user must forget the device in iOS Settings. Registering the callbacks must not add `setEncryptionLevel()` (would cause a second pairing dialog).
 - BLE notifications: the five NOTIFY characteristics (confState, scanList, brightness, otaControl, wifiReset) carry explicit CCCD (0x2902) descriptors — Bluedroid does not auto-create one from the NOTIFY property bit, and iOS rejects subscription attempts without it. `notify()` only delivers to clients that subscribed via the CCCD. The CCCDs are deliberately unencrypted; the notified values are not secrets.
 - OTA TLS: the firmware download verifies GitHub's certificate chain against pinned roots in `include/GitHubRootCerts.h` (Sectigo E46/R46 + ISRG X1/X2) via `setCACert()` — no `setInsecure()`. Fails closed if validation fails. Update the header if GitHub rotates roots.
-- OTA image signing (defense-in-depth, independent of the TLS check above): `_downloadFlashAndHash` streams `firmware.bin` in a single HTTP GET, feeding each chunk to both `Update.write()` (flash) and a running SHA-256 hash — the same bytes are hashed and written, so there is no gap between "verified" and "flashed" content. `Update.end()` (which activates the image) is only called after `OtaImageVerifier::verify()` passes against the public key embedded in `include/OtaSigningKey.h`; on failure `Update.abort()` leaves the previous firmware bootable. The signature itself is fetched separately from `<firmware-url>.sig` (small, not the flashed content, so no TOCTOU risk there). Signing happens in `.github/workflows/release.yml` via `scripts/sign_firmware.py`, using the `OTA_SIGNING_PRIVATE_KEY` GitHub Actions secret (never committed). See `SECURITY_REVIEW.md` Finding 3 and `test/test_ota_image_verifier`.
+- OTA image signing (defense-in-depth, independent of the TLS check above): `OtaUpdater` streams `firmware.bin` in a single HTTP GET, feeding each chunk to both `Update.write()` (flash) and a running SHA-256 hash - the same bytes are hashed and written, so there is no gap between "verified" and "flashed" content. `Update.end()` (which activates the image) is only called after the production adapter delegates to `OtaImageVerifier::verify()` against the public key embedded in `include/OtaSigningKey.h`; on failure `Update.abort()` leaves the previous firmware bootable. The signature itself is fetched separately from `<firmware-url>.sig` (small, not the flashed content, so no TOCTOU risk there). The transaction tests in `test/test_ota_updater` prove the fail-closed ordering and restart behavior; `test/test_ota_image_verifier` also checks that the embedded key parses as RSA-2048. Signing happens in `.github/workflows/release.yml` via `scripts/sign_firmware.py`, using the `OTA_SIGNING_PRIVATE_KEY` GitHub Actions secret (never committed). See `SECURITY_REVIEW.md` Finding 3.
 - Releases are built and signed by `.github/workflows/release.yml` on `v*.*.*` tag push — do not publish `firmware.bin` manually; an unsigned binary won't be accepted by devices running this firmware or later.
 - WiFi credentials stored in NVS via Preferences (namespace: "credentials")
 - NTP server: `de.pool.ntp.org`, timezone: CET/CEST
