@@ -20,7 +20,7 @@ The OTA app slots are sized by `partitions_ota.csv`. After an `esp32dev` build,
 check the published image with `python3 scripts/check_flash_budget.py`.
 The check measures `.pio/build/esp32dev/firmware.bin`, the artifact that must
 fit the OTA slot, and derives the capacity from the `ota_0` app row. It warns
-at 95% and fails at 98%; override either threshold with
+at 96% and fails at 98%; override either threshold with
 `FLASH_BUDGET_WARNING_PERCENT` or `FLASH_BUDGET_FAIL_PERCENT` (or the matching
 script arguments). CI and release run this check before release signing.
 

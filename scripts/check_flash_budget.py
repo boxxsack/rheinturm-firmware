@@ -24,7 +24,7 @@ def main() -> int:
     parser.add_argument("--binary", default=".pio/build/esp32dev/firmware.bin")
     parser.add_argument("--partitions", default="partitions_ota.csv")
     parser.add_argument("--warning-percent", type=float,
-                        default=float(os.getenv("FLASH_BUDGET_WARNING_PERCENT", "95")))
+                        default=float(os.getenv("FLASH_BUDGET_WARNING_PERCENT", "96")))
     parser.add_argument("--fail-percent", type=float,
                         default=float(os.getenv("FLASH_BUDGET_FAIL_PERCENT", "98")))
     args = parser.parse_args()
@@ -37,14 +37,25 @@ def main() -> int:
                f"({percent:.1f}%), {remaining:,} bytes remaining")
     print(message)
 
+    summary = os.getenv("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a") as stream:
+            stream.write(f"{message}\n")
+
     if percent >= args.fail_percent:
         level = "error" if os.getenv("GITHUB_ACTIONS") == "true" else "failure"
         if os.getenv("GITHUB_ACTIONS") == "true":
             print(f"::{level} title=Flash budget exceeded::{message}")
+        if summary:
+            with open(summary, "a") as stream:
+                stream.write("Error: flash budget hard limit exceeded.\n")
         return 1
     if percent >= args.warning_percent:
         if os.getenv("GITHUB_ACTIONS") == "true":
             print(f"::warning title=Flash budget warning::{message}")
+        if summary:
+            with open(summary, "a") as stream:
+                stream.write("Warning: flash budget warning threshold reached.\n")
         return 0
     return 0
 

@@ -58,4 +58,4 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Check OTA flash budget
-        run: python3 scripts/check_flash_budget.py >> "$GITHUB_STEP_SUMMARY"
+        run: python3 scripts/check_flash_budget.py

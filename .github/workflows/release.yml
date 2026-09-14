@@ -46,7 +46,7 @@ jobs:
         run: pio run -e esp32dev
 
       - name: Check OTA flash budget
-        run: python3 scripts/check_flash_budget.py >> "$GITHUB_STEP_SUMMARY"
+        run: python3 scripts/check_flash_budget.py
 
       - name: Sign firmware.bin
         env:
