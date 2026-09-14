@@ -16,6 +16,14 @@ pio run --target upload    # Build and flash to device
 pio device monitor         # Serial monitor (115200 baud)
 ```
 
+The OTA app slots are sized by `partitions_ota.csv`. After an `esp32dev` build,
+check the published image with `python3 scripts/check_flash_budget.py`.
+The check measures `.pio/build/esp32dev/firmware.bin`, the artifact that must
+fit the OTA slot, and derives the capacity from the `ota_0` app row. It warns
+at 96% and fails at 98%; override either threshold with
+`FLASH_BUDGET_WARNING_PERCENT` or `FLASH_BUDGET_FAIL_PERCENT` (or the matching
+script arguments). CI and release run this check before release signing.
+
 No test infrastructure exists for the ESP32 target itself. There is one host-side (`native`)
 PlatformIO test env for the pure-logic modules (`OtaImageVerifier`, `BleAuthFailurePolicy`); its
 pre-build configuration explicitly selects the source needed by each suite, so hardware-dependent
@@ -84,7 +92,7 @@ ConnectivityManager and TimeDisplay have no knowledge of BLE.
 - WiFi credentials stored in NVS via Preferences (namespace: "credentials")
 - NTP server: `de.pool.ntp.org`, timezone: CET/CEST
 - Partition scheme: `partitions_ota.csv` (dual OTA partitions — `ota_0` and `ota_1` at ~1.8MB each, enables over-the-air updates)
-- Flash budget is tight (~95% of the OTA partition used as of this writing — check `pio run` output). The OTA image-signing addition (OtaImageVerifier + embedded public key + single-fetch hash-while-flash in `_downloadFlashAndHash`) net *reduced* flash usage by ~7.8KB versus pre-#17: it replaced `HTTPUpdate` with direct `Update.h` calls (dropping the now-unused `HTTPUpdate` library), and mbedtls's PK/RSA/hash code was already linked in via `WiFiClientSecure`'s TLS stack, so RSA verification itself added only ~3.3KB gross. Re-measure before adding more code near this ceiling.
+- Flash budget is tight (~95% of the OTA partition used as of this writing — see `scripts/check_flash_budget.py` under Build Commands above). The OTA image-signing addition (OtaImageVerifier + embedded public key + single-fetch hash-while-flash in `_downloadFlashAndHash`) net *reduced* flash usage by ~7.8KB versus pre-#17: it replaced `HTTPUpdate` with direct `Update.h` calls (dropping the now-unused `HTTPUpdate` library), and mbedtls's PK/RSA/hash code was already linked in via `WiFiClientSecure`'s TLS stack, so RSA verification itself added only ~3.3KB gross. Re-measure before adding more code near this ceiling.
 - Dependencies: Adafruit NeoPixel v1.12.3, Update.h (included in ESP32 Arduino framework; OTA no longer uses the higher-level `HTTPUpdate` wrapper — see the OTA image signing bullet above)
 - `#define DEBUG` enables serial debug output
 - `FIRMWARE_VERSION` is defined at the top of `src/ESP32_BLE_WIFI_SCAN_FEAT.cpp` (single source of truth) - published releases on GitHub Releases

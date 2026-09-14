@@ -56,3 +56,6 @@ jobs:
             grep -E '^(RAM|Flash):' firmware-build.log || echo "Firmware size unavailable because the build did not complete."
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Check OTA flash budget
+        run: python3 scripts/check_flash_budget.py
