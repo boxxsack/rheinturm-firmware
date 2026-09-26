@@ -7,12 +7,16 @@
 #include "OtaImageVerifier.h"
 #include "OtaUpdater.h"
 #include "BleAuthFailurePolicy.h"
+#include "DeviceNameLogic.h"
 
 #include <BLEDevice.h>
 #include <BLEUtils.h>
 #include <BLEServer.h>
 #include <BLE2902.h>
+#include <BLEAdvertising.h>
 #include <BLESecurity.h>
+#include <Preferences.h>
+#include <esp_gap_ble_api.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
@@ -35,6 +39,13 @@
 #define SCHEDULE_UUID         "4fafff0a-1fb5-459e-8fcc-c5c9c331914b"
 #define SEPARATOR_CONFIG_UUID "4fafff0b-1fb5-459e-8fcc-c5c9c331914b"
 #define CONF_WIFI_RESET_UUID  "4fafff0c-1fb5-459e-8fcc-c5c9c331914b"
+#define DEVICE_NAME_UUID      "4fafff0d-1fb5-459e-8fcc-c5c9c331914b"
+#define DEVICE_NAME_CONTROL_UUID "4fafff0e-1fb5-459e-8fcc-c5c9c331914b"
+
+namespace {
+constexpr const char* kDeviceNameNvsNamespace = "device";
+constexpr const char* kDeviceNameNvsKey = "name";
+}
 
 // --- BLE Callback Classes (private to this translation unit) ---
 
@@ -180,6 +191,19 @@ public:
         if (String(value.c_str()) == "reset-wifi") {
             _owner._stageWifiReset();
         }
+    }
+
+private:
+    BLEConfigInterface& _owner;
+};
+
+class DeviceNameCallbacks : public BLECharacteristicCallbacks {
+public:
+    explicit DeviceNameCallbacks(BLEConfigInterface& owner) : _owner(owner) {}
+
+    void onWrite(BLECharacteristic* pChar) override {
+        const std::string value = pChar->getValue();
+        _owner._stageDeviceName(reinterpret_cast<const uint8_t*>(value.data()), value.size());
     }
 
 private:
@@ -472,8 +496,26 @@ BLEConfigInterface::BLEConfigInterface(ConnectivityManager& connectivity, TimeDi
     memset(_scanBuffer, 0, sizeof(_scanBuffer));
 }
 
-void BLEConfigInterface::begin(const char* deviceName, const char* firmwareVersion) {
-    BLEDevice::init(deviceName);
+void BLEConfigInterface::begin(const char* firmwareVersion) {
+    Preferences namePreferences;
+    namePreferences.begin(kDeviceNameNvsNamespace, false);
+    const String storedName = namePreferences.getString(kDeviceNameNvsKey, "");
+    std::string normalizedName;
+    DeviceNameLogic::ValidationError nameError;
+    const bool storedNameValid = DeviceNameLogic::validateAndNormalize(
+        reinterpret_cast<const uint8_t*>(storedName.c_str()), storedName.length(),
+        normalizedName, nameError);
+    if (storedNameValid) {
+        _deviceName = normalizedName.c_str();
+    } else {
+        _deviceName = DeviceNameLogic::kDefaultName;
+        namePreferences.putString(kDeviceNameNvsKey, _deviceName);
+        Serial.printf("BLE: Invalid or missing stored device name, using %s (%s)\n",
+            _deviceName.c_str(), DeviceNameLogic::errorCode(nameError));
+    }
+    namePreferences.end();
+
+    BLEDevice::init(_deviceName.c_str());
 
     // Require an encrypted, bonded BLE link before the security-sensitive
     // characteristics (WiFi credentials, OTA trigger, WiFi reset) can be used.
@@ -550,6 +592,15 @@ void BLEConfigInterface::begin(const char* deviceName, const char* firmwareVersi
         CONF_WIFI_RESET_UUID,
         BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_NOTIFY);
 
+    _pDeviceName = pService->createCharacteristic(
+        DEVICE_NAME_UUID,
+        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
+
+    _pDeviceNameControl = pService->createCharacteristic(
+        DEVICE_NAME_CONTROL_UUID,
+        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE
+            | BLECharacteristic::PROPERTY_NOTIFY);
+
     // Bluedroid does not auto-create a CCCD (0x2902) from the NOTIFY property
     // bit; without one, iOS rejects subscription attempts with
     // CBATTErrorInvalidHandle and clients silently fall back to polling.
@@ -558,6 +609,8 @@ void BLEConfigInterface::begin(const char* deviceName, const char* firmwareVersi
     _pBrightness->addDescriptor(new BLE2902());
     _pOtaControl->addDescriptor(new BLE2902());
     _pWifiReset->addDescriptor(new BLE2902());
+    _pDeviceName->addDescriptor(new BLE2902());
+    _pDeviceNameControl->addDescriptor(new BLE2902());
 
     _pSsid->setCallbacks(new SSIDCallbacks(*this));
     _pPassword->setCallbacks(new PasswordCallbacks(*this));
@@ -568,6 +621,7 @@ void BLEConfigInterface::begin(const char* deviceName, const char* firmwareVersi
     _pSchedule->setCallbacks(new ScheduleCallbacks(*this));
     _pSeparatorConfig->setCallbacks(new SeparatorConfigCallbacks(*this));
     _pWifiReset->setCallbacks(new WifiResetCallbacks(*this));
+    _pDeviceNameControl->setCallbacks(new DeviceNameCallbacks(*this));
 
     // Gate the security-sensitive characteristics behind link encryption. A peer
     // must pair/bond before it can submit WiFi credentials, trigger an OTA, or
@@ -578,6 +632,7 @@ void BLEConfigInterface::begin(const char* deviceName, const char* firmwareVersi
     _pPassword->setAccessPermissions(encPerm);
     _pOtaControl->setAccessPermissions(encPerm);
     _pWifiReset->setAccessPermissions(encPerm);
+    _pDeviceNameControl->setAccessPermissions(encPerm);
 
     // Set initial values
     uint8_t initialBrightness = 100;
@@ -591,13 +646,21 @@ void BLEConfigInterface::begin(const char* deviceName, const char* firmwareVersi
     uint8_t separatorBytes[2];
     _display.getSeparatorConfigBytes(separatorBytes);
     _pSeparatorConfig->setValue(separatorBytes, 2);
+    _pDeviceName->setValue(_deviceName.c_str());
+    _pDeviceNameControl->setValue("name-ok");
 
     pService->start();
 
     BLEAdvertising* pAdvertising = BLEDevice::getAdvertising();
     pAdvertising->addServiceUUID(SERVICE_UUID);
-    pAdvertising->setScanResponse(true);
     pAdvertising->setMinPreferred(0x0);
+    // Keep the service UUID in the primary advertisement and put only the
+    // complete local name in the scan response. The default Arduino BLE
+    // configuration copies the service UUID into the scan response too, which
+    // leaves too little room for a user name.
+    BLEAdvertisementData scanResponseData;
+    scanResponseData.setName(_deviceName.c_str());
+    pAdvertising->setScanResponseData(scanResponseData);
     BLEDevice::startAdvertising();
 
     Serial.println("BLE initialized, advertising started");
@@ -606,6 +669,10 @@ void BLEConfigInterface::begin(const char* deviceName, const char* firmwareVersi
 void BLEConfigInterface::tick() {
     _handleAdvertisingRestart();
     _dispatchStagedValues();
+    if (_nameAdvertisingRefreshRequested) {
+        _nameAdvertisingRefreshRequested = false;
+        _refreshAdvertisingName(true);
+    }
     _advanceScanStateMachine();
     _syncConfState();
 }
@@ -663,6 +730,12 @@ void BLEConfigInterface::_stageWifiReset() {
     Serial.println("BLE: WiFi reset staged");
 }
 
+void BLEConfigInterface::_stageDeviceName(const uint8_t* name, size_t len) {
+    _pendingDeviceName.assign(reinterpret_cast<const char*>(name), len);
+    _deviceNameReady = true;
+    Serial.printf("BLE: Device name write staged (%u bytes)\n", static_cast<unsigned>(len));
+}
+
 void BLEConfigInterface::_performWifiReset() {
     Serial.println("BLE: Resetting WiFi credentials");
     _connectivity.clearCredentials();
@@ -707,6 +780,11 @@ void BLEConfigInterface::_setClientConnected(bool connected) {
 }
 
 void BLEConfigInterface::_dispatchStagedValues() {
+    if (_deviceNameReady) {
+        _deviceNameReady = false;
+        _applyDeviceName();
+    }
+
     if (_credentialsReady) {
         _credentialsReady = false;
         Serial.println("BLE: Dispatching credentials to ConnectivityManager");
@@ -745,6 +823,40 @@ void BLEConfigInterface::_dispatchStagedValues() {
     }
 }
 
+void BLEConfigInterface::_applyDeviceName() {
+    std::string normalizedName;
+    DeviceNameLogic::ValidationError error;
+    const bool valid = DeviceNameLogic::validateAndNormalize(
+        reinterpret_cast<const uint8_t*>(_pendingDeviceName.data()),
+        _pendingDeviceName.size(), normalizedName, error);
+    if (!valid) {
+        const String status = String("name-fail:") + DeviceNameLogic::errorCode(error);
+        _pDeviceNameControl->setValue(status.c_str());
+        _pDeviceNameControl->notify();
+        Serial.println("BLE: Rejected device name: " + status);
+        return;
+    }
+
+    Preferences namePreferences;
+    namePreferences.begin(kDeviceNameNvsNamespace, false);
+    const size_t storedBytes = namePreferences.putString(kDeviceNameNvsKey, normalizedName.c_str());
+    namePreferences.end();
+    if (storedBytes != normalizedName.size()) {
+        _pDeviceNameControl->setValue("name-fail:storage");
+        _pDeviceNameControl->notify();
+        Serial.println("BLE: Could not persist device name");
+        return;
+    }
+
+    _deviceName = normalizedName.c_str();
+    _pDeviceName->setValue(_deviceName.c_str());
+    _pDeviceName->notify();
+    _pDeviceNameControl->setValue("name-ok");
+    _pDeviceNameControl->notify();
+    _nameAdvertisingRefreshRequested = true;
+    Serial.println("BLE: Device name changed to " + _deviceName);
+}
+
 void BLEConfigInterface::_performOta(const String& url) {
     Serial.println("OTA: Starting update from: " + url);
 
@@ -777,6 +889,8 @@ void BLEConfigInterface::_performOta(const String& url) {
     _pSchedule = nullptr;
     _pSeparatorConfig = nullptr;
     _pWifiReset = nullptr;
+    _pDeviceName = nullptr;
+    _pDeviceNameControl = nullptr;
 
     Serial.printf("OTA: Free heap after BLE deinit: %u bytes\n", ESP.getFreeHeap());
 
@@ -900,10 +1014,34 @@ void BLEConfigInterface::_handleAdvertisingRestart() {
     if (!_clientConnected && _wasConnected) {
         // Client just disconnected — restart advertising
         delay(500);  // brief settle
+        _refreshAdvertisingName(false);
         _pServer->startAdvertising();
         Serial.println("BLE: Client disconnected, restarting advertising");
     }
     _wasConnected = _clientConnected;
+}
+
+void BLEConfigInterface::_refreshAdvertisingName(bool restartAdvertising) {
+    // setDeviceName updates GAP's local name immediately. The scan response is
+    // refreshed explicitly because Arduino-ESP32 caches its raw payload.
+    const esp_err_t nameResult = esp_ble_gap_set_device_name(_deviceName.c_str());
+    if (nameResult != ESP_OK) {
+        Serial.printf("BLE: Could not update GAP device name: %s\n",
+            esp_err_to_name(nameResult));
+    }
+
+    BLEAdvertising* advertising = BLEDevice::getAdvertising();
+    if (advertising == nullptr) return;
+    BLEAdvertisementData scanResponseData;
+    scanResponseData.setName(_deviceName.c_str());
+    advertising->setScanResponseData(scanResponseData);
+    if (restartAdvertising && !_clientConnected) {
+        advertising->stop();
+        advertising->start();
+        Serial.println("BLE: Advertising restarted with updated device name");
+    } else if (_clientConnected) {
+        Serial.println("BLE: Updated name will advertise after the current client disconnects");
+    }
 }
 
 void BLEConfigInterface::_syncConfState() {

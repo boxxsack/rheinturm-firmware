@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <string>
 #include <Arduino.h>
 
 class ConnectivityManager;
@@ -15,7 +16,7 @@ public:
 
     // Call once in setup(). Creates BLE server, service, characteristics (with
     // CCCD descriptors on the NOTIFY ones), starts advertising.
-    void begin(const char* deviceName = "Rheinturm", const char* firmwareVersion = "0.0.0");
+    void begin(const char* firmwareVersion = "0.0.0");
 
     // Call every loop() iteration. Non-blocking. Drives:
     //   - Advertising restart after disconnect
@@ -39,6 +40,7 @@ public:
     void _stageSchedule(const uint8_t* payload, size_t len);
     void _stageSeparatorConfig(const uint8_t* payload, size_t len);
     void _stageWifiReset();
+    void _stageDeviceName(const uint8_t* name, size_t len);
 
     // Rainbow control — call from the main loop to drive the blocking animation.
     // Returns true once when a BLE client has requested a rainbow start.
@@ -67,6 +69,8 @@ private:
     BLECharacteristic* _pSchedule = nullptr;
     BLECharacteristic* _pSeparatorConfig = nullptr;
     BLECharacteristic* _pWifiReset = nullptr;
+    BLECharacteristic* _pDeviceName = nullptr;
+    BLECharacteristic* _pDeviceNameControl = nullptr;
 
     // Connection state
     bool _clientConnected = false;
@@ -98,6 +102,13 @@ private:
     // WiFi reset state
     bool _wifiResetRequested = false;
 
+    // Device name state. The write is validated and persisted from tick(), not
+    // from the BLE callback task.
+    String _deviceName;
+    std::string _pendingDeviceName;
+    bool _deviceNameReady = false;
+    bool _nameAdvertisingRefreshRequested = false;
+
     // Scan state machine
     enum class ScanPhase : uint8_t {
         IDLE,
@@ -126,7 +137,9 @@ private:
     void _encodeScanResults(int networkCount);
     void _deliverNextChunk();
     void _handleAdvertisingRestart();
+    void _refreshAdvertisingName(bool restartAdvertising);
     void _syncConfState();
+    void _applyDeviceName();
     void _performOta(const String& url);
     void _performWifiReset();
 };
