@@ -42,7 +42,7 @@ void setup() {
     connectivity.begin();
     display.loadSchedule();
     display.loadSeparatorConfig();
-    ble.begin("Rheinturm", FIRMWARE_VERSION);
+    ble.begin(FIRMWARE_VERSION);
 
     Serial.println("*****SETUP END*****");
 }

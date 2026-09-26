@@ -8,6 +8,7 @@ Import("env")  # type: ignore[name-defined]  # Provided by PlatformIO/SCons.
 
 TEST_SOURCES = {
     "test_ble_auth_failure_policy": ["BleAuthFailurePolicy.cpp"],
+    "test_device_name": ["DeviceNameLogic.cpp"],
     "test_ota_image_verifier": ["OtaImageVerifier.cpp"],
     "test_ota_updater": ["OtaUpdater.cpp"],
     "test_time_display": ["TimeDisplay.cpp", "TimeDisplayLogic.cpp"],

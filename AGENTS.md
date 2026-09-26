@@ -91,6 +91,9 @@ ConnectivityManager and TimeDisplay have no knowledge of BLE.
 
 - 41 NeoPixel LEDs on GPIO 5, BCD layout with separators at indices 11 and 26
 - BLE device name: "Rheinturm", service UUID: `4fafc201-1fb5-459e-8fcc-c5c9c331914b`
+- Device naming: the local name is stored in NVS (`device` / `name`), defaults to
+  `Rheinturm`, and is exposed through the name/control characteristics documented
+  in `BLE_PROTOCOL.md`; the service UUID remains the discovery key.
 - BLE security: link encryption + bonding required ("Just Works" pairing, `ESP_LE_AUTH_REQ_SC_BOND`). The SSID, password, otaControl and wifiReset characteristics carry `ESP_GATT_PERM_*_ENCRYPTED` permissions, so a client must pair before provisioning or triggering OTA. See `SECURITY_REVIEW.md`.
 - BLE bond self-heal: `SecurityCallbacks` in `src/BLEConfigInterface.cpp` logs every `ESP_GAP_BLE_AUTH_CMPL_EVT` (peer address + fail reason) and, per `BleAuthFailurePolicy`, removes the ESP32's bond and disconnects on auth failure so the next connect re-pairs. Bluedroid (IDF 4.4) already clears NVS keys on most SMP failures itself; this is an explicit, stack-version-independent layer plus diagnostics. It cannot heal an iOS-side stale key (ESP32 has no bond) - the user must forget the device in iOS Settings. Registering the callbacks must not add `setEncryptionLevel()` (would cause a second pairing dialog).
 - BLE notifications: the five NOTIFY characteristics (confState, scanList, brightness, otaControl, wifiReset) carry explicit CCCD (0x2902) descriptors — Bluedroid does not auto-create one from the NOTIFY property bit, and iOS rejects subscription attempts without it. `notify()` only delivers to clients that subscribed via the CCCD. The CCCDs are deliberately unencrypted; the notified values are not secrets.
