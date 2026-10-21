@@ -17,6 +17,7 @@
 #include <BLESecurity.h>
 #include <Preferences.h>
 #include <esp_gap_ble_api.h>
+#include <esp_idf_version.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
@@ -31,6 +32,12 @@
 #if !defined(CONFIG_BT_GATTS_SEND_SERVICE_CHANGE_AUTO) || !CONFIG_BT_GATTS_SEND_SERVICE_CHANGE_AUTO
 #error "Service Changed handling requires CONFIG_BT_GATTS_SEND_SERVICE_CHANGE_AUTO"
 #endif
+// The hand-written Bluedroid mirrors below were verified against IDF 4.4.7
+// (libbt.a disassembly: btu_bta_alarm_process reads p_cback at offset 8 and
+// btu_task_post returns bool, true on success). Re-verify before bumping.
+#if ESP_IDF_VERSION != ESP_IDF_VERSION_VAL(4, 4, 7)
+#error "Service Changed BTU mirrors were verified against IDF 4.4.7 only"
+#endif
 
 // Bluedroid's automatic Service Changed path is internal to the IDF GATT
 // stack: gatt_proc_srv_chg() marks every persisted bond pending and indicates
@@ -41,9 +48,10 @@
 // the framework ships no Bluedroid headers. They mirror IDF 4.4
 // components/bt/host/bluedroid/stack/btu/btu_task.c (btu_task_post with
 // SIG_BTU_BTA_ALARM runs btu_bta_alarm_process, which calls p_tle->p_cback(p_tle))
-// and the leading fields of TIMER_LIST_ENT in stack/btu.h (p_cback at offset 8).
+// and the leading fields of TIMER_LIST_ENT in stack/btu.h (p_cback at offset 8 on 32-bit Xtensa).
+// btu_task_post returns true when the message was queued.
 extern "C" void gatt_proc_srv_chg(void);
-extern "C" int btu_task_post(uint32_t sig, void* param, uint32_t timeout);
+extern "C" bool btu_task_post(uint32_t sig, void* param, uint32_t timeout);
 
 namespace {
 constexpr uint32_t kSigBtuBtaAlarm = 3;
@@ -53,7 +61,7 @@ struct BtuTimerEntry {
     void* prev;
     void (*callback)(BtuTimerEntry*);
 };
-static_assert(offsetof(BtuTimerEntry, callback) == 8, "TIMER_LIST_ENT::p_cback offset");
+static_assert(sizeof(void*) == 4 && offsetof(BtuTimerEntry, callback) == 8, "TIMER_LIST_ENT::p_cback offset");
 
 void serviceChangedOnBtuTask(BtuTimerEntry*) {
     gatt_proc_srv_chg();
@@ -849,7 +857,7 @@ void BLEConfigInterface::_triggerServiceChangeIfPending() {
     if (!_serviceChange.shouldTrigger()) return;
 
     Serial.println("BLE: Posting Service Changed for bonded peers to the BTU task");
-    if (btu_task_post(kSigBtuBtaAlarm, &g_serviceChangedEntry, 0) != 0) {
+    if (!btu_task_post(kSigBtuBtaAlarm, &g_serviceChangedEntry, 0)) {
         Serial.println("BLE: Could not post Service Changed to the BTU task");
         return;
     }
