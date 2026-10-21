@@ -31,3 +31,19 @@ advertised when the current client disconnects. When no client is connected,
 advertising restarts immediately with the new name.
 
 Existing characteristic UUIDs and behavior are unchanged.
+
+## GATT service cache invalidation
+
+The ESP32 Arduino framework in this project uses the Bluedroid BLE stack with
+`CONFIG_BT_GATTS_SEND_SERVICE_CHANGE_AUTO=1`. The firmware stores its firmware
+version in the separate NVS namespace `gatt_cache` under `version`. When that
+marker changes, it invokes Bluedroid's automatic Service Changed path. Bluedroid
+keeps the pending state per bonded peer, sends the `0x2A05` indication to a
+connected peer, and sends it when a disconnected bonded peer next reconnects.
+The existing Wi-Fi credential and device-name namespaces are not modified.
+
+This follows the ESP-IDF GATT server API documentation for the Service Changed
+indication:
+<https://docs.espressif.com/projects/esp-idf/en/release-v5.1/esp32/api-reference/bluetooth/esp_gatts.html>
+and the Bluedroid implementation of the automatic path:
+<https://github.com/espressif/esp-idf/blob/release/v4.4/components/bt/host/bluedroid/stack/gatt/gatt_main.c#L1160-L1184>.

@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <string>
 #include <Arduino.h>
+#include "ServiceChangeLogic.h"
 
 class ConnectivityManager;
 class TimeDisplay;
@@ -41,6 +42,7 @@ public:
     void _stageSeparatorConfig(const uint8_t* payload, size_t len);
     void _stageWifiReset();
     void _stageDeviceName(const uint8_t* name, size_t len);
+    void _noteBondedPeerAuthenticated();
 
     // Rainbow control — call from the main loop to drive the blocking animation.
     // Returns true once when a BLE client has requested a rainbow start.
@@ -75,6 +77,13 @@ private:
     // Connection state
     bool _clientConnected = false;
     bool _wasConnected = false;
+
+    // Bluedroid keeps the Service Changed pending bit per bonded peer. The
+    // firmware version is the persisted marker for whether this GATT table has
+    // already been announced to the stack.
+    String _firmwareVersion;
+    ServiceChangeLogic _serviceChange;
+    volatile bool _serviceChangeRequested = false;
 
     // Staged values from callbacks (consumed in tick)
     String _pendingSsid;
@@ -142,4 +151,6 @@ private:
     void _applyDeviceName();
     void _performOta(const String& url);
     void _performWifiReset();
+    void _triggerServiceChangeIfPending();
+    void _persistServiceChangeVersionIfReady();
 };

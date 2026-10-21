@@ -26,7 +26,7 @@ script arguments). CI and release run this check before release signing.
 
 No test infrastructure exists for the ESP32 target itself. There is one host-side (`native`)
 PlatformIO test env for the pure-logic modules (`OtaImageVerifier`, `BleAuthFailurePolicy`,
-`OtaUpdater`, `DeviceNameLogic`) and for `TimeDisplayLogic`/`TimeDisplay` (`test/test_time_display`); its
+`OtaUpdater`, `DeviceNameLogic`, `ServiceChangeLogic`) and for `TimeDisplayLogic`/`TimeDisplay` (`test/test_time_display`); its
 pre-build configuration explicitly selects the source needed by each suite, so hardware-dependent
 sources cannot silently enter the native build:
 
@@ -41,7 +41,7 @@ Pull requests and pushes to `main` run native tests and an `esp32dev` build in
 
 ## Architecture
 
-The firmware is split into eight modules with a thin orchestrator:
+The firmware is split into nine modules with a thin orchestrator:
 
 ### Modules
 
@@ -60,6 +60,8 @@ The firmware is split into eight modules with a thin orchestrator:
 - **BleAuthFailurePolicy** (`include/BleAuthFailurePolicy.h`, `src/BleAuthFailurePolicy.cpp`) — Pure function, no Arduino/ESP-IDF dependency: decides whether a failed `ESP_GAP_BLE_AUTH_CMPL_EVT` should remove the ESP32's bond and disconnect the peer (see the BLE bond self-heal key detail below). Host-testable — see `test/test_ble_auth_failure_policy`.
 
 - **DeviceNameLogic** (`include/DeviceNameLogic.h`, `src/DeviceNameLogic.cpp`) — Pure function, no Arduino/ESP-IDF dependency: validates and normalizes a raw BLE device-name write (trim, 1-20 characters, allowed character set, UTF-8 byte limit). Host-testable — see `test/test_device_name`. The wire contract is owned by `BLE_PROTOCOL.md`.
+
+- **ServiceChangeLogic** (`include/ServiceChangeLogic.h`, `src/ServiceChangeLogic.cpp`) - Pure function: decides when the stored firmware-version marker requires a GATT Service Changed indication and when to persist it. `BLEConfigInterface` runs Bluedroid's internal path on the BTU task; the build guards, IDF pin and rationale are in code comments, and the wire behavior is owned by `BLE_PROTOCOL.md`. Host-testable - see `test/test_service_change_logic`.
 
 ### Shared Types
 

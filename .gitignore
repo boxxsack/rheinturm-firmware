@@ -3,3 +3,14 @@
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch
+
+# Local hardware and iPhone validation captures
+capture_serial_raw.py
+firmware-old-*.bin
+iphone-tsc-*.log
+iphone-tsc-*.err
+iphone-tsc-*.logarchive/
+iphone-tsc-*.tar
+iphone-tsc-logarchive/
+logs/
+serial-*.log

@@ -17,6 +17,7 @@
 #include <BLESecurity.h>
 #include <Preferences.h>
 #include <esp_gap_ble_api.h>
+#include <esp_idf_version.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
@@ -24,6 +25,50 @@
 #include <Arduino.h>
 #include <mbedtls/md.h>
 #include <algorithm>
+
+#if !defined(CONFIG_BLUEDROID_ENABLED)
+#error "Service Changed handling requires the Bluedroid BLE stack"
+#endif
+#if !defined(CONFIG_BT_GATTS_SEND_SERVICE_CHANGE_AUTO) || !CONFIG_BT_GATTS_SEND_SERVICE_CHANGE_AUTO
+#error "Service Changed handling requires CONFIG_BT_GATTS_SEND_SERVICE_CHANGE_AUTO"
+#endif
+// The hand-written Bluedroid mirrors below were verified against IDF 4.4.7
+// (libbt.a disassembly: btu_bta_alarm_process reads p_cback at offset 8 and
+// btu_task_post returns bool, true on success). Re-verify before bumping.
+#if ESP_IDF_VERSION != ESP_IDF_VERSION_VAL(4, 4, 7)
+#error "Service Changed BTU mirrors were verified against IDF 4.4.7 only"
+#endif
+
+// Bluedroid's automatic Service Changed path is internal to the IDF GATT
+// stack: gatt_proc_srv_chg() marks every persisted bond pending and indicates
+// to connected peers. The public esp_ble_gatts_send_service_change_indication()
+// is unavailable in this mode, and rebuilding the prebuilt framework is out of
+// scope. gatt_proc_srv_chg() mutates BTU-owned state (bond list, TCB, gatt_cb)
+// so it must run on the BTU task; the prototypes below are hand-written because
+// the framework ships no Bluedroid headers. They mirror IDF 4.4
+// components/bt/host/bluedroid/stack/btu/btu_task.c (btu_task_post with
+// SIG_BTU_BTA_ALARM runs btu_bta_alarm_process, which calls p_tle->p_cback(p_tle))
+// and the leading fields of TIMER_LIST_ENT in stack/btu.h (p_cback at offset 8 on 32-bit Xtensa).
+// btu_task_post returns true when the message was queued.
+extern "C" void gatt_proc_srv_chg(void);
+extern "C" bool btu_task_post(uint32_t sig, void* param, uint32_t timeout);
+
+namespace {
+constexpr uint32_t kSigBtuBtaAlarm = 3;
+
+struct BtuTimerEntry {
+    void* next;
+    void* prev;
+    void (*callback)(BtuTimerEntry*);
+};
+static_assert(sizeof(void*) == 4 && offsetof(BtuTimerEntry, callback) == 8, "TIMER_LIST_ENT::p_cback offset");
+
+void serviceChangedOnBtuTask(BtuTimerEntry*) {
+    gatt_proc_srv_chg();
+}
+
+BtuTimerEntry g_serviceChangedEntry = {nullptr, nullptr, serviceChangedOnBtuTask};
+}
 
 // BLE UUIDs
 #define SERVICE_UUID          "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
@@ -45,6 +90,8 @@
 namespace {
 constexpr const char* kDeviceNameNvsNamespace = "device";
 constexpr const char* kDeviceNameNvsKey = "name";
+constexpr const char* kGattChangeNvsNamespace = "gatt_cache";
+constexpr const char* kGattChangeNvsKey = "version";
 }
 
 // --- BLE Callback Classes (private to this translation unit) ---
@@ -221,6 +268,8 @@ private:
 // passkey or numeric-comparison event is ever raised.
 class SecurityCallbacks : public BLESecurityCallbacks {
 public:
+    explicit SecurityCallbacks(BLEConfigInterface& owner) : _owner(owner) {}
+
     uint32_t onPassKeyRequest() override { return 0; }
     void onPassKeyNotify(uint32_t) override {}
     bool onSecurityRequest() override { return true; }
@@ -235,6 +284,7 @@ public:
         if (auth.success) {
             Serial.printf("BLE: Authentication succeeded, peer=%s addr_type=%u auth_mode=0x%02x\n",
                 addr, auth.addr_type, auth.auth_mode);
+            _owner._noteBondedPeerAuthenticated();
             return;
         }
 
@@ -253,6 +303,9 @@ public:
         Serial.printf("BLE: Removed stale bond for peer=%s (%s), disconnecting (%s)\n",
             addr, esp_err_to_name(removeErr), esp_err_to_name(disconnectErr));
     }
+
+private:
+    BLEConfigInterface& _owner;
 };
 
 // --- OTA production adapters ---
@@ -497,6 +550,18 @@ BLEConfigInterface::BLEConfigInterface(ConnectivityManager& connectivity, TimeDi
 }
 
 void BLEConfigInterface::begin(const char* firmwareVersion) {
+    _firmwareVersion = firmwareVersion;
+
+    Preferences gattChangePreferences;
+    gattChangePreferences.begin(kGattChangeNvsNamespace, false);
+    const String storedGattVersion = gattChangePreferences.getString(kGattChangeNvsKey, "");
+    _serviceChange.begin(storedGattVersion.c_str(), _firmwareVersion.c_str());
+    if (_serviceChange.pending()) {
+        Serial.printf("BLE: GATT layout marker changed from '%s' to '%s'; waiting for a bonded peer\n",
+            storedGattVersion.c_str(), _firmwareVersion.c_str());
+    }
+    gattChangePreferences.end();
+
     Preferences namePreferences;
     namePreferences.begin(kDeviceNameNvsNamespace, false);
     const String storedName = namePreferences.getString(kDeviceNameNvsKey, "");
@@ -536,7 +601,7 @@ void BLEConfigInterface::begin(const char* firmwareVersion) {
     pSecurity->setInitEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
     pSecurity->setRespEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
     // Only observes auth outcomes; does not change when encryption is requested.
-    BLEDevice::setSecurityCallbacks(new SecurityCallbacks());
+    BLEDevice::setSecurityCallbacks(new SecurityCallbacks(*this));
 
     _pServer = BLEDevice::createServer();
     _pServer->setCallbacks(new ServerCallbacks(*this));
@@ -667,6 +732,8 @@ void BLEConfigInterface::begin(const char* firmwareVersion) {
 }
 
 void BLEConfigInterface::tick() {
+    _triggerServiceChangeIfPending();
+    _persistServiceChangeVersionIfReady();
     _handleAdvertisingRestart();
     _dispatchStagedValues();
     if (_nameAdvertisingRefreshRequested) {
@@ -776,7 +843,46 @@ void BLEConfigInterface::_setClientConnected(bool connected) {
     if (connected) {
         // Force re-notification of current state so the app gets it immediately
         _lastConfState = 0xFF;
+        _serviceChangeRequested = true;
     }
+}
+
+void BLEConfigInterface::_noteBondedPeerAuthenticated() {
+    _serviceChange.markPeerAuthenticated();
+}
+
+void BLEConfigInterface::_triggerServiceChangeIfPending() {
+    if (!_serviceChangeRequested) return;
+    _serviceChangeRequested = false;
+    if (!_serviceChange.shouldTrigger()) return;
+
+    Serial.println("BLE: Posting Service Changed for bonded peers to the BTU task");
+    if (!btu_task_post(kSigBtuBtaAlarm, &g_serviceChangedEntry, 0)) {
+        Serial.println("BLE: Could not post Service Changed to the BTU task");
+        return;
+    }
+    _serviceChange.markTriggered();
+}
+
+void BLEConfigInterface::_persistServiceChangeVersionIfReady() {
+    if (!_serviceChange.shouldPersist()) return;
+
+    Preferences gattChangePreferences;
+    if (!gattChangePreferences.begin(kGattChangeNvsNamespace, false)) {
+        Serial.println("BLE: Could not open GATT change NVS namespace");
+        return;
+    }
+
+    const size_t written = gattChangePreferences.putString(
+        kGattChangeNvsKey, _firmwareVersion.c_str());
+    gattChangePreferences.end();
+    if (written != _firmwareVersion.length()) {
+        Serial.println("BLE: Could not persist GATT layout marker");
+        return;
+    }
+
+    _serviceChange.markPersisted();
+    Serial.printf("BLE: Persisted GATT layout marker '%s'\n", _firmwareVersion.c_str());
 }
 
 void BLEConfigInterface::_dispatchStagedValues() {
