@@ -83,6 +83,7 @@ private:
     // already been announced to the stack.
     String _firmwareVersion;
     ServiceChangeLogic _serviceChange;
+    volatile bool _serviceChangeRequested = false;
 
     // Staged values from callbacks (consumed in tick)
     String _pendingSsid;

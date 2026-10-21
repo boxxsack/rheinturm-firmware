@@ -25,17 +25,42 @@
 #include <mbedtls/md.h>
 #include <algorithm>
 
-#if defined(CONFIG_BLUEDROID_ENABLED)
+#if !defined(CONFIG_BLUEDROID_ENABLED)
+#error "Service Changed handling requires the Bluedroid BLE stack"
+#endif
 #if !defined(CONFIG_BT_GATTS_SEND_SERVICE_CHANGE_AUTO) || !CONFIG_BT_GATTS_SEND_SERVICE_CHANGE_AUTO
 #error "Service Changed handling requires CONFIG_BT_GATTS_SEND_SERVICE_CHANGE_AUTO"
 #endif
+
 // Bluedroid's automatic Service Changed path is internal to the IDF GATT
-// stack. It marks every persisted bonded peer pending and sends immediately to
-// connected peers; a later connection receives the indication before the GATT
-// client callback proceeds. See the IDF 4.4 implementation:
-// https://github.com/espressif/esp-idf/blob/release/v4.4/components/bt/host/bluedroid/stack/gatt/gatt_main.c#L1160-L1184
+// stack: gatt_proc_srv_chg() marks every persisted bond pending and indicates
+// to connected peers. The public esp_ble_gatts_send_service_change_indication()
+// is unavailable in this mode, and rebuilding the prebuilt framework is out of
+// scope. gatt_proc_srv_chg() mutates BTU-owned state (bond list, TCB, gatt_cb)
+// so it must run on the BTU task; the prototypes below are hand-written because
+// the framework ships no Bluedroid headers. They mirror IDF 4.4
+// components/bt/host/bluedroid/stack/btu/btu_task.c (btu_task_post with
+// SIG_BTU_BTA_ALARM runs btu_bta_alarm_process, which calls p_tle->p_cback(p_tle))
+// and the leading fields of TIMER_LIST_ENT in stack/btu.h (p_cback at offset 8).
 extern "C" void gatt_proc_srv_chg(void);
-#endif
+extern "C" int btu_task_post(uint32_t sig, void* param, uint32_t timeout);
+
+namespace {
+constexpr uint32_t kSigBtuBtaAlarm = 3;
+
+struct BtuTimerEntry {
+    void* next;
+    void* prev;
+    void (*callback)(BtuTimerEntry*);
+};
+static_assert(offsetof(BtuTimerEntry, callback) == 8, "TIMER_LIST_ENT::p_cback offset");
+
+void serviceChangedOnBtuTask(BtuTimerEntry*) {
+    gatt_proc_srv_chg();
+}
+
+BtuTimerEntry g_serviceChangedEntry = {nullptr, nullptr, serviceChangedOnBtuTask};
+}
 
 // BLE UUIDs
 #define SERVICE_UUID          "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
@@ -699,6 +724,7 @@ void BLEConfigInterface::begin(const char* firmwareVersion) {
 }
 
 void BLEConfigInterface::tick() {
+    _triggerServiceChangeIfPending();
     _persistServiceChangeVersionIfReady();
     _handleAdvertisingRestart();
     _dispatchStagedValues();
@@ -809,7 +835,7 @@ void BLEConfigInterface::_setClientConnected(bool connected) {
     if (connected) {
         // Force re-notification of current state so the app gets it immediately
         _lastConfState = 0xFF;
-        _triggerServiceChangeIfPending();
+        _serviceChangeRequested = true;
     }
 }
 
@@ -818,20 +844,16 @@ void BLEConfigInterface::_noteBondedPeerAuthenticated() {
 }
 
 void BLEConfigInterface::_triggerServiceChangeIfPending() {
+    if (!_serviceChangeRequested) return;
+    _serviceChangeRequested = false;
     if (!_serviceChange.shouldTrigger()) return;
 
-#if defined(CONFIG_BLUEDROID_ENABLED)
-    // The firmware is built with CONFIG_BT_GATTS_SEND_SERVICE_CHANGE_AUTO=1.
-    // The public esp_ble_gatts_send_service_change_indication() API is
-    // intentionally unavailable in that mode and only covers connected peers.
-    // gatt_proc_srv_chg() is the stack's automatic path: it persists the
-    // pending bit for every known bond and sends the indication to any peer
-    // connected now. The stack sends it for a disconnected bonded peer on its
-    // next connection.
-    Serial.println("BLE: Signalling Bluedroid Service Changed for bonded peers");
-    gatt_proc_srv_chg();
+    Serial.println("BLE: Posting Service Changed for bonded peers to the BTU task");
+    if (btu_task_post(kSigBtuBtaAlarm, &g_serviceChangedEntry, 0) != 0) {
+        Serial.println("BLE: Could not post Service Changed to the BTU task");
+        return;
+    }
     _serviceChange.markTriggered();
-#endif
 }
 
 void BLEConfigInterface::_persistServiceChangeVersionIfReady() {
