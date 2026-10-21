@@ -11,6 +11,7 @@ TEST_SOURCES = {
     "test_device_name": ["DeviceNameLogic.cpp"],
     "test_ota_image_verifier": ["OtaImageVerifier.cpp"],
     "test_ota_updater": ["OtaUpdater.cpp"],
+    "test_service_change_logic": ["ServiceChangeLogic.cpp"],
     "test_time_display": ["TimeDisplay.cpp", "TimeDisplayLogic.cpp"],
 }
 

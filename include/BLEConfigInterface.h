@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <string>
 #include <Arduino.h>
+#include "ServiceChangeLogic.h"
 
 class ConnectivityManager;
 class TimeDisplay;
@@ -81,9 +82,7 @@ private:
     // firmware version is the persisted marker for whether this GATT table has
     // already been announced to the stack.
     String _firmwareVersion;
-    bool _serviceChangePending = false;
-    bool _serviceChangeTriggered = false;
-    bool _bondedPeerAuthenticated = false;
+    ServiceChangeLogic _serviceChange;
 
     // Staged values from callbacks (consumed in tick)
     String _pendingSsid;

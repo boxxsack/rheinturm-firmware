@@ -26,6 +26,9 @@
 #include <algorithm>
 
 #if defined(CONFIG_BLUEDROID_ENABLED)
+#if !defined(CONFIG_BT_GATTS_SEND_SERVICE_CHANGE_AUTO) || !CONFIG_BT_GATTS_SEND_SERVICE_CHANGE_AUTO
+#error "Service Changed handling requires CONFIG_BT_GATTS_SEND_SERVICE_CHANGE_AUTO"
+#endif
 // Bluedroid's automatic Service Changed path is internal to the IDF GATT
 // stack. It marks every persisted bonded peer pending and sends immediately to
 // connected peers; a later connection receives the indication before the GATT
@@ -519,8 +522,8 @@ void BLEConfigInterface::begin(const char* firmwareVersion) {
     Preferences gattChangePreferences;
     gattChangePreferences.begin(kGattChangeNvsNamespace, false);
     const String storedGattVersion = gattChangePreferences.getString(kGattChangeNvsKey, "");
-    _serviceChangePending = storedGattVersion != _firmwareVersion;
-    if (_serviceChangePending) {
+    _serviceChange.begin(storedGattVersion.c_str(), _firmwareVersion.c_str());
+    if (_serviceChange.pending()) {
         Serial.printf("BLE: GATT layout marker changed from '%s' to '%s'; waiting for a bonded peer\n",
             storedGattVersion.c_str(), _firmwareVersion.c_str());
     }
@@ -811,11 +814,11 @@ void BLEConfigInterface::_setClientConnected(bool connected) {
 }
 
 void BLEConfigInterface::_noteBondedPeerAuthenticated() {
-    _bondedPeerAuthenticated = true;
+    _serviceChange.markPeerAuthenticated();
 }
 
 void BLEConfigInterface::_triggerServiceChangeIfPending() {
-    if (!_serviceChangePending || _serviceChangeTriggered) return;
+    if (!_serviceChange.shouldTrigger()) return;
 
 #if defined(CONFIG_BLUEDROID_ENABLED)
     // The firmware is built with CONFIG_BT_GATTS_SEND_SERVICE_CHANGE_AUTO=1.
@@ -827,12 +830,12 @@ void BLEConfigInterface::_triggerServiceChangeIfPending() {
     // next connection.
     Serial.println("BLE: Signalling Bluedroid Service Changed for bonded peers");
     gatt_proc_srv_chg();
-    _serviceChangeTriggered = true;
+    _serviceChange.markTriggered();
 #endif
 }
 
 void BLEConfigInterface::_persistServiceChangeVersionIfReady() {
-    if (!_serviceChangePending || !_serviceChangeTriggered || !_bondedPeerAuthenticated) return;
+    if (!_serviceChange.shouldPersist()) return;
 
     Preferences gattChangePreferences;
     if (!gattChangePreferences.begin(kGattChangeNvsNamespace, false)) {
@@ -848,9 +851,7 @@ void BLEConfigInterface::_persistServiceChangeVersionIfReady() {
         return;
     }
 
-    _serviceChangePending = false;
-    _serviceChangeTriggered = false;
-    _bondedPeerAuthenticated = false;
+    _serviceChange.markPersisted();
     Serial.printf("BLE: Persisted GATT layout marker '%s'\n", _firmwareVersion.c_str());
 }
 
